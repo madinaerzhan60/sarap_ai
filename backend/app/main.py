@@ -97,7 +97,14 @@ async def create_source(source: SourceCreate, context: AuthContext = Depends(req
     if repository.configured:
         return await repository.create_source(source)
     mode = source.collection_mode.value
-    status = "oauth_required" if mode == "api" and source.connection_type == "official" else "active"
+    if source.connection_type.value == "imported":
+        status = "ready"
+    elif mode == "api" and source.connection_type.value == "official":
+        status = "oauth_required"
+    elif not source.source_url:
+        status = "setup_required"
+    else:
+        status = "active"
     payload = source.model_dump(mode="json") | {"id": f"source-{len(sources)+1}", "status": status}
     sources.append(payload)
     return payload

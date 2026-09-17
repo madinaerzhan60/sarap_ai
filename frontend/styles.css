@@ -94,6 +94,14 @@ a { color: inherit; }
 .source-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .source-choice label { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.5); }
 .source-choice small { display: block; color: var(--muted); }
+.source-search-panel { padding: 14px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.38); }
+.source-search-panel .field { margin-bottom: 8px; }
+.source-search-panel .form-note { margin: 2px 0 0; }
+.source-search-panel > .btn { width: 100%; margin-top: 4px; }
+.onboarding-sources label { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; }
+.onboarding-sources label > input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--teal); }
+.onboarding-sources label > input[type="url"] { grid-column: 2 / -1; width: 100%; min-height: 40px; padding: 9px 11px; border: 1px solid rgba(27,30,39,.12); border-radius: 10px; background: rgba(255,255,255,.75); color: var(--ink); }
+.onboarding-sources .btn { padding: 8px 11px; }
 
 /* Application shell */
 .app-shell { min-height: 100vh; }
@@ -226,6 +234,8 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
 
 @media (max-width: 420px) {
   .nav-actions .btn { padding: 9px 11px; font-size: 12px; }.hero h1 { font-size: 34px; }.metric-label { min-height: 30px; }.metric-change { min-height: 24px; }.evidence { grid-template-columns: 1fr; }
+  .onboarding-sources label { grid-template-columns: auto minmax(0,1fr); }
+  .onboarding-sources label .btn, .onboarding-sources label > input[type="url"] { grid-column: 1 / -1; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }

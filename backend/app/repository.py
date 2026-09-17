@@ -101,7 +101,15 @@ class SupabaseRepository:
 
     async def create_source(self, source: SourceCreate) -> dict[str, Any]:
         mode = source.collection_mode.value
-        payload = source.model_dump(mode="json") | {"status": "oauth_required" if mode == "api" and source.connection_type.value == "official" else "active"}
+        if source.connection_type.value == "imported":
+            status = "ready"
+        elif mode == "api" and source.connection_type.value == "official":
+            status = "oauth_required"
+        elif not source.source_url:
+            status = "setup_required"
+        else:
+            status = "active"
+        payload = source.model_dump(mode="json") | {"status": status}
         rows = await self.request("POST", "source_connections", json=payload, prefer="return=representation")
         return rows[0]
 
