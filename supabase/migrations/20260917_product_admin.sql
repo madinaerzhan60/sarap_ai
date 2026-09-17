@@ -82,6 +82,39 @@ alter table public.feature_flags enable row level security;
 alter table public.system_settings enable row level security;
 alter table public.admin_audit_log enable row level security;
 
+-- PostgREST requires SQL grants in addition to RLS. RLS still limits every
+-- authenticated request to the caller's own business workspace.
+grant usage on schema public to authenticated, service_role;
+grant select on public.profiles to authenticated;
+grant update (full_name, updated_at) on public.profiles to authenticated;
+grant select on public.businesses, public.business_members to authenticated;
+grant update on public.businesses to authenticated;
+grant select, insert, update, delete on
+  public.business_locations,
+  public.brand_aliases,
+  public.source_connections,
+  public.source_jobs,
+  public.mentions,
+  public.mention_revisions,
+  public.ai_analysis,
+  public.mention_aspects,
+  public.risk_scores,
+  public.alerts,
+  public.alert_deliveries,
+  public.search_queries,
+  public.web_discoveries,
+  public.daily_metrics,
+  public.aspect_metrics,
+  public.telegram_connections,
+  public.workspace_settings
+to authenticated;
+grant select on public.ai_usage to authenticated;
+grant all privileges on all tables in schema public to service_role;
+grant usage, select on all sequences in schema public to service_role;
+
+-- Keep encrypted provider credentials and platform controls server-only.
+revoke all on public.source_credentials from anon, authenticated;
+
 drop policy if exists "workspace settings isolation" on public.workspace_settings;
 create policy "workspace settings isolation" on public.workspace_settings for all
   using (public.is_business_member(business_id))

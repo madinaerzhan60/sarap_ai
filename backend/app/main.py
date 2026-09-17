@@ -23,7 +23,10 @@ from app.security import AuthContext, require_admin_context, require_business_me
 from app.repository import RepositoryUnavailable, repository
 
 app = FastAPI(title="SARAP API", version="0.2.0", description="Reputation intelligence platform for Kazakhstan and the CIS")
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_methods=["*"], allow_headers=["*"])
+frontend_origins = {"http://localhost:5173", "http://127.0.0.1:5173"}
+if os.getenv("FRONTEND_URL"):
+    frontend_origins.add(os.environ["FRONTEND_URL"].rstrip("/"))
+app.add_middleware(CORSMiddleware, allow_origins=sorted(frontend_origins), allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
 
 # Isolated fallback used only when the local demo runs without Supabase.
 seen_hashes: set[str] = set()
@@ -68,7 +71,9 @@ def public_config() -> dict:
     return {
         "SUPABASE_URL": os.getenv("SUPABASE_URL", ""),
         "SUPABASE_ANON_KEY": os.getenv("SUPABASE_ANON_KEY", ""),
-        "API_URL": os.getenv("APP_BASE_URL", ""),
+        # Empty means same-origin. API_URL is only needed when the frontend and
+        # backend are deployed on different domains.
+        "API_URL": os.getenv("API_URL", ""),
     }
 
 

@@ -220,7 +220,12 @@ async function createBackendSource(data) {
   const connectionType=data.method==='api'?'official':data.method==='import'?'imported':'monitored';
   const body={business_id:state.business.id,source:data.name,connection_type:connectionType,collection_mode:data.method==='import'?'auto':data.method};
   if(data.url) body.source_url=data.url;
-  const response=await fetch(apiPath('/api/sources'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify(body)});
+  let response;
+  try {
+    response=await fetch(apiPath('/api/sources'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify(body)});
+  } catch {
+    throw new Error('SARAP API is unavailable. Reload the page and try again.');
+  }
   if(!response.ok) throw new Error((await response.json()).detail||'Could not create source');
   return response.json();
 }
