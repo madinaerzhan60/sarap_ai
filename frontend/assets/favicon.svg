@@ -1,5 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <rect width="48" height="48" rx="15" fill="#1E8F85"/>
-  <path d="M34 13H21a8 8 0 0 0 0 16h5a4 4 0 0 0 0-8h-5a4 4 0 0 1 0-8h13M14 35h13a8 8 0 0 0 0-16" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-  <circle cx="35" cy="35" r="3.5" fill="#E2AD5A"/>
+  <defs>
+    <linearGradient id="glass" x1="8" y1="5" x2="40" y2="43" gradientUnits="userSpaceOnUse"><stop stop-color="#F4FFF8"/><stop offset=".5" stop-color="#BEE4CD"/><stop offset="1" stop-color="#6DBC8B"/></linearGradient>
+    <linearGradient id="bar" x1="0" y1="1" x2="0" y2="0"><stop stop-color="#078B55"/><stop offset="1" stop-color="#7EF69B"/></linearGradient>
+  </defs>
+  <path d="M10 6h28a6 6 0 0 1 6 6v22a6 6 0 0 1-6 6H22l-8 5v-5h-4a6 6 0 0 1-6-6V12a6 6 0 0 1 6-6Z" fill="url(#glass)" stroke="#EFFFF3" stroke-width="2"/>
+  <rect x="12" y="25" width="6" height="8" rx="3" fill="url(#bar)"/><rect x="21" y="18" width="6" height="15" rx="3" fill="url(#bar)"/><rect x="30" y="12" width="6" height="21" rx="3" fill="url(#bar)"/>
 </svg>
