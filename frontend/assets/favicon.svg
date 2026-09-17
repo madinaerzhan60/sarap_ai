@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
   <defs>
-    <linearGradient id="glass" x1="8" y1="5" x2="40" y2="43" gradientUnits="userSpaceOnUse"><stop stop-color="#F4FFF8"/><stop offset=".5" stop-color="#BEE4CD"/><stop offset="1" stop-color="#6DBC8B"/></linearGradient>
-    <linearGradient id="bar" x1="0" y1="1" x2="0" y2="0"><stop stop-color="#078B55"/><stop offset="1" stop-color="#7EF69B"/></linearGradient>
+    <linearGradient id="glass" x1="8" y1="5" x2="40" y2="43" gradientUnits="userSpaceOnUse"><stop stop-color="#8CFFA5"/><stop offset=".5" stop-color="#25D979"/><stop offset="1" stop-color="#009657"/></linearGradient>
+    <linearGradient id="bar" x1="0" y1="1" x2="0" y2="0"><stop stop-color="#007C49"/><stop offset="1" stop-color="#B3FFC1"/></linearGradient>
   </defs>
   <path d="M10 6h28a6 6 0 0 1 6 6v22a6 6 0 0 1-6 6H22l-8 5v-5h-4a6 6 0 0 1-6-6V12a6 6 0 0 1 6-6Z" fill="url(#glass)" stroke="#EFFFF3" stroke-width="2"/>
   <rect x="12" y="25" width="6" height="8" rx="3" fill="url(#bar)"/><rect x="21" y="18" width="6" height="15" rx="3" fill="url(#bar)"/><rect x="30" y="12" width="6" height="21" rx="3" fill="url(#bar)"/>
