@@ -4,6 +4,7 @@ alter table public.profiles add column if not exists role text not null default 
 -- the existing self-update RLS policy. Role changes are service-role only.
 revoke update on public.profiles from authenticated;
 grant update (full_name, updated_at) on public.profiles to authenticated;
+grant select, update on public.profiles to service_role;
 alter table public.businesses add column if not exists plan text not null default 'starter';
 alter table public.businesses add column if not exists last_activity_at timestamptz;
 alter table public.mentions add column if not exists reviewed boolean not null default false;
