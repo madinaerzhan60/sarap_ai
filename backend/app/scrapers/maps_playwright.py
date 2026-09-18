@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -63,7 +65,11 @@ class PlaywrightMapScraper(BaseScraper):
     async def connect(self) -> None:
         proxy = await self.proxy_pool.next()
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=True, proxy=proxy.playwright() if proxy else None)
+        executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "").strip()
+        mac_chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        if not executable and Path(mac_chrome).is_file():
+            executable = mac_chrome
+        self.browser = await self.playwright.chromium.launch(headless=True, proxy=proxy.playwright() if proxy else None, executable_path=executable or None)
         self.context = await self.browser.new_context(locale="ru-KZ", timezone_id="Asia/Almaty", viewport={"width": 1280, "height": 900})
 
     async def scrape(self, query: str, limit: int = 50) -> list[ScrapedItem]:

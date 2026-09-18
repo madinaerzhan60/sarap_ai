@@ -229,6 +229,52 @@ class ReviewPageScraperConnector(BaseConnector):
         return items
 
 
+class TwoGisPlaywrightConnector(BaseConnector):
+    """Collect 2GIS reviews rendered in a real browser without bypassing verification pages."""
+
+    source = "2gis"
+    connection_type = ConnectionType.monitored
+    collection_method = "playwright"
+
+    def __init__(self, page_url: str) -> None:
+        safe_url = _safe_public_url(page_url)
+        parsed = urlparse(safe_url)
+        parts = [part for part in parsed.path.split("/") if part]
+        firm_match = re.search(r"/firm/(\d+)", parsed.path)
+        if parts and firm_match:
+            parsed = parsed._replace(path=f"/{parts[0]}/firm/{firm_match.group(1)}/tab/reviews", query="", fragment="")
+        self.page_url = parsed.geturl()
+
+    async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+        from typing import cast
+
+        from app.scrapers.maps_playwright import TwoGisScraper
+        from app.scrapers.proxy_pool import ProxyPool
+        from app.scrapers.storage import SupabaseRawReviewStore
+
+        proxies = [value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()]
+        scraper = TwoGisScraper(cast(SupabaseRawReviewStore, None), ProxyPool(proxies))
+        await scraper.connect()
+        try:
+            scraped = await scraper.scrape(self.page_url, limit=50)
+        finally:
+            await scraper.close()
+        items = [RawItem(
+            source=self.source,
+            source_type=MentionType.review,
+            external_id=item.stable_id(),
+            external_url=item.url,
+            author_name=None if item.author == "Unknown" else item.author,
+            text=item.text_content,
+            rating=item.rating,
+            published_at=item.published_at,
+            metadata={**item.metadata, "language": item.language},
+        ) for item in scraped]
+        if last_seen_item_id:
+            items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
+        return items
+
+
 def extract_youtube_video_ids(html: str) -> list[str]:
     """Return unique public video IDs in the order shown on a channel page."""
     seen: set[str] = set()
@@ -314,6 +360,11 @@ def connector_for(source: dict[str, Any]) -> BaseConnector:
     if name in {"2gis", "2gis maps"} and mode == "auto" and os.getenv("ENABLE_DEMO_CONNECTORS", "false").lower() == "true":
         from app.connectors.demo import DemoTwoGisConnector
         return DemoTwoGisConnector()
+    if name in {"2gis", "2gis maps"} and mode in {"auto", "scraper"}:
+        page_url = source.get("source_url")
+        if not page_url:
+            raise ConnectorUnavailable("2GIS collection requires the business page URL")
+        return TwoGisPlaywrightConnector(str(page_url))
     if name in {"youtube", "youtube channel"} and mode in {"auto", "scraper"}:
         page_url = source.get("source_url")
         if not page_url:
