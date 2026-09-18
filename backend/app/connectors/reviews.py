@@ -234,6 +234,23 @@ class ReviewPageScraperConnector(BaseConnector):
         return items
 
 
+def normalize_twogis_business_url(page_url: str) -> str:
+    """Return the exact reviews URL and reject search pages without a firm ID."""
+    safe_url = _safe_public_url(page_url)
+    parsed = urlparse(safe_url)
+    hostname = (parsed.hostname or "").lower()
+    if not (hostname.startswith("2gis.") or ".2gis." in hostname):
+        raise ConnectorUnavailable("2GIS source must use a 2gis business page URL")
+    firm_match = re.search(r"/firm/(\d+)(?:/|$)", parsed.path)
+    parts = [part for part in parsed.path.split("/") if part]
+    if not firm_match or not parts:
+        raise ConnectorUnavailable(
+            "This 2GIS URL is incomplete. Open the exact company card and copy a link containing /firm/<numeric company ID>."
+        )
+    city = parts[0]
+    return parsed._replace(path=f"/{city}/firm/{firm_match.group(1)}/tab/reviews", query="", fragment="").geturl()
+
+
 class TwoGisPlaywrightConnector(BaseConnector):
     """Collect 2GIS reviews rendered in a real browser without bypassing verification pages."""
 
@@ -242,13 +259,7 @@ class TwoGisPlaywrightConnector(BaseConnector):
     collection_method = "playwright"
 
     def __init__(self, page_url: str) -> None:
-        safe_url = _safe_public_url(page_url)
-        parsed = urlparse(safe_url)
-        parts = [part for part in parsed.path.split("/") if part]
-        firm_match = re.search(r"/firm/(\d+)", parsed.path)
-        if parts and firm_match:
-            parsed = parsed._replace(path=f"/{parts[0]}/firm/{firm_match.group(1)}/tab/reviews", query="", fragment="")
-        self.page_url = parsed.geturl()
+        self.page_url = normalize_twogis_business_url(page_url)
 
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         from typing import cast

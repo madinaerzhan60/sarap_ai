@@ -5,12 +5,13 @@ from app.services.ai import analyze
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
-from app.connectors.reviews import InstagramFallbackConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
+from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
 from app.scrapers.fallback import CollectorProvider, FallbackPipeline, normalize_api_item
 from app.scrapers.models import ScrapedItem
 import asyncio
+import pytest
 
 
 def test_mixed_language_aspects_and_risk():
@@ -109,6 +110,16 @@ def test_collector_language_detection_handles_ru_kk_and_mixed_text():
 def test_twogis_search_url_is_normalized_to_reviews_tab():
     connector = TwoGisPlaywrightConnector("https://2gis.kz/almaty/search/1Fit/firm/70000001035980354/76.88%2C43.23")
     assert connector.page_url == "https://2gis.kz/almaty/firm/70000001035980354/tab/reviews"
+
+
+def test_twogis_search_url_without_firm_id_is_rejected():
+    with pytest.raises(ConnectorUnavailable, match="numeric company ID"):
+        TwoGisPlaywrightConnector("https://2gis.kz/almaty/search/1Fit/firm/")
+
+
+def test_twogis_source_rejects_non_twogis_domain():
+    with pytest.raises(ConnectorUnavailable, match="2gis business page URL"):
+        TwoGisPlaywrightConnector("https://example.com/almaty/firm/70000001035980354")
 
 
 def test_instagram_source_uses_fallback_connector():

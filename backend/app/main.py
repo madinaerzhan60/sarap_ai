@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-from app.connectors.reviews import ConnectorUnavailable, connector_for
+from app.connectors.reviews import ConnectorUnavailable, connector_for, normalize_twogis_business_url
 from app.connectors.search import FreeSearchProvider, fan_out
 from app.models import DiscoveryRequest, ExtractedReview, MentionType, ProcessedMention, RawItem, ReviewExtractionRequest, ReviewImportRequest, SourceCreate, SourceOAuthCredential, SourceUpdate
 from app.services.llm import analyze_with_cascade, generate_business_recommendations
@@ -215,6 +215,11 @@ async def import_extracted_reviews(request: ReviewImportRequest, context: AuthCo
 @app.post("/api/sources")
 async def create_source(source: SourceCreate, context: AuthContext = Depends(require_user)) -> dict:
     await require_business_member(context, source.business_id)
+    if source.source.lower().strip() in {"2gis", "2gis maps"} and source.source_url:
+        try:
+            source = source.model_copy(update={"source_url": normalize_twogis_business_url(str(source.source_url))})
+        except ConnectorUnavailable as exc:
+            raise HTTPException(422, str(exc)) from exc
     if repository.configured:
         try:
             return await repository.create_source(source)
@@ -360,7 +365,13 @@ async def edit_source(source_id: UUID, update: SourceUpdate, context: AuthContex
     if not source:
         raise HTTPException(404, "Source not found")
     await require_business_member(context, UUID(source["business_id"]))
-    values = {"source_url": str(update.source_url) if update.source_url else None, "collection_mode": update.collection_mode.value, "last_seen_item_id": None, "error_message": None, "active_collection_method": None, "status": "active"}
+    source_url = str(update.source_url) if update.source_url else None
+    if str(source.get("source", "")).lower().strip() in {"2gis", "2gis maps"} and source_url:
+        try:
+            source_url = normalize_twogis_business_url(source_url)
+        except ConnectorUnavailable as exc:
+            raise HTTPException(422, str(exc)) from exc
+    values = {"source_url": source_url, "collection_mode": update.collection_mode.value, "last_seen_item_id": None, "error_message": None, "active_collection_method": None, "status": "active"}
     if repository.configured:
         await repository.update_source(str(source_id), values)
         updated = await repository.get_source(str(source_id))
