@@ -218,7 +218,12 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
     await require_business_member(context, UUID(source["business_id"]))
     try:
         connector = connector_for(source)
-        items = await connector.fetch_latest(source.get("last_seen_item_id"))
+        last_seen_item_id = source.get("last_seen_item_id")
+        if repository.configured and last_seen_item_id:
+            complete = await repository.external_item_is_complete(UUID(source["business_id"]), str(source["source"]), last_seen_item_id)
+            if not complete:
+                last_seen_item_id = None
+        items = await connector.fetch_latest(last_seen_item_id)
     except ConnectorUnavailable as exc:
         raise HTTPException(409, str(exc)) from exc
     except Exception as exc:

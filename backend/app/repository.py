@@ -40,34 +40,75 @@ class SupabaseRepository:
 
     async def find_by_hash(self, business_id: UUID, content_hash: str) -> ProcessedMention | None:
         rows = await self.request("GET", "mentions", params={"select": "id", "business_id": f"eq.{business_id}", "content_hash": f"eq.{content_hash}", "limit": "1"})
-        return await self.get_processed(rows[0]["id"]) if rows else None
+        if not rows:
+            return None
+        mention_id = rows[0]["id"]
+        analysis_rows, risk_rows = await __import__("asyncio").gather(
+            self.request("GET", "ai_analysis", params={"select": "mention_id", "mention_id": f"eq.{mention_id}", "limit": "1"}),
+            self.request("GET", "risk_scores", params={"select": "mention_id", "mention_id": f"eq.{mention_id}", "limit": "1"}),
+        )
+        # A previous request may have inserted the mention before a later table
+        # failed. Returning None lets the pipeline repair that partial record.
+        return await self.get_processed(mention_id) if analysis_rows and risk_rows else None
+
+    async def external_item_is_complete(self, business_id: UUID, source: str, external_id: str) -> bool:
+        rows = await self.request("GET", "mentions", params={
+            "select": "id", "business_id": f"eq.{business_id}", "source": f"ilike.{source}",
+            "external_id": f"eq.{external_id}", "limit": "1",
+        })
+        if not rows:
+            return False
+        mention_id = rows[0]["id"]
+        analysis_rows, risk_rows = await __import__("asyncio").gather(
+            self.request("GET", "ai_analysis", params={"select": "mention_id", "mention_id": f"eq.{mention_id}", "limit": "1"}),
+            self.request("GET", "risk_scores", params={"select": "mention_id", "mention_id": f"eq.{mention_id}", "limit": "1"}),
+        )
+        return bool(analysis_rows and risk_rows)
 
     async def persist_processed(self, result: ProcessedMention, provider: str = "local") -> ProcessedMention:
         m = result.mention
-        existing = await self.find_by_hash(m.business_id, m.content_hash)
-        if existing:
-            return existing.model_copy(update={"duplicate": True})
-        mention_rows = await self.request("POST", "mentions", json={
-            "id": str(m.id), "business_id": str(m.business_id), "source": m.source,
-            "source_type": m.source_type.value, "external_id": m.external_id,
-            "external_url": m.external_url, "author_name": m.author_name, "text": m.text,
-            "rating": m.rating, "published_at": m.published_at.isoformat() if m.published_at else None,
-            "collected_at": m.collected_at.isoformat(), "language": result.analysis.language,
-            "content_hash": m.content_hash, "metadata": m.metadata,
-        }, prefer="return=representation")
-        mention_id = mention_rows[0]["id"]
-        await self.request("POST", "ai_analysis", json={
+        existing_rows = await self.request("GET", "mentions", params={"select": "*", "business_id": f"eq.{m.business_id}", "content_hash": f"eq.{m.content_hash}", "limit": "1"})
+        if existing_rows:
+            mention_id = existing_rows[0]["id"]
+            analysis_rows, risk_rows = await __import__("asyncio").gather(
+                self.request("GET", "ai_analysis", params={"select": "mention_id", "mention_id": f"eq.{mention_id}", "limit": "1"}),
+                self.request("GET", "risk_scores", params={"select": "mention_id", "mention_id": f"eq.{mention_id}", "limit": "1"}),
+            )
+            if analysis_rows and risk_rows:
+                existing = await self._hydrate(existing_rows[0])
+                return existing.model_copy(update={"duplicate": True})
+        else:
+            mention_rows = await self.request("POST", "mentions", json={
+                "id": str(m.id), "business_id": str(m.business_id), "source": m.source,
+                "source_type": m.source_type.value, "external_id": m.external_id,
+                "external_url": m.external_url, "author_name": m.author_name, "text": m.text,
+                "rating": m.rating, "published_at": m.published_at.isoformat() if m.published_at else None,
+                "collected_at": m.collected_at.isoformat(), "language": result.analysis.language,
+                "content_hash": m.content_hash, "metadata": m.metadata,
+            }, prefer="return=representation")
+            mention_id = mention_rows[0]["id"]
+        analysis_payload = {
             "mention_id": mention_id, "language": result.analysis.language,
             "sentiment": result.analysis.sentiment, "sentiment_score": result.analysis.sentiment_score,
             "severity": result.analysis.severity, "confidence": result.analysis.confidence,
             "summary": result.analysis.summary,
             "model": provider, "escalated": result.analysis.escalated,
-        })
+        }
+        try:
+            await self.request("POST", "ai_analysis", params={"on_conflict": "mention_id"}, json=analysis_payload, prefer="resolution=merge-duplicates")
+        except RepositoryUnavailable as exc:
+            if "'summary' column" not in str(exc):
+                raise
+            analysis_payload.pop("summary", None)
+            await self.request("POST", "ai_analysis", params={"on_conflict": "mention_id"}, json=analysis_payload, prefer="resolution=merge-duplicates")
+        await self.request("DELETE", "mention_aspects", params={"mention_id": f"eq.{mention_id}"})
         if result.analysis.aspects:
             await self.request("POST", "mention_aspects", json=[{"mention_id": mention_id, "aspect": a.aspect, "sentiment": a.sentiment} for a in result.analysis.aspects])
-        await self.request("POST", "risk_scores", json={"mention_id": mention_id, "score": result.risk.score, "level": result.risk.level, "reasons": result.risk.reasons})
+        await self.request("POST", "risk_scores", params={"on_conflict": "mention_id"}, json={"mention_id": mention_id, "score": result.risk.score, "level": result.risk.level, "reasons": result.risk.reasons}, prefer="resolution=merge-duplicates")
         if result.alert_created:
-            await self.request("POST", "alerts", json={"business_id": str(m.business_id), "mention_id": mention_id, "severity": result.risk.level, "status": "new"})
+            alert_rows = await self.request("GET", "alerts", params={"select": "id", "mention_id": f"eq.{mention_id}", "limit": "1"})
+            if not alert_rows:
+                await self.request("POST", "alerts", json={"business_id": str(m.business_id), "mention_id": mention_id, "severity": result.risk.level, "status": "new"})
         await self.request("POST", "ai_usage", json={"business_id": str(m.business_id), "provider": provider, "model": provider, "operation": "mention_analysis"})
         await self.request("PATCH", "businesses", params={"id": f"eq.{m.business_id}"}, json={"last_activity_at": datetime.now(timezone.utc).isoformat()})
         return result

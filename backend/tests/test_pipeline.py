@@ -7,6 +7,7 @@ from app.services.risk import calculate
 from app.services.polling import next_poll
 from app.connectors.reviews import extract_reviews_from_html, extract_youtube_video_ids
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
+from app.scrapers.models import detect_language
 
 
 def test_mixed_language_aspects_and_risk():
@@ -76,11 +77,20 @@ def test_plain_text_review_fallback_parses_ratings():
     reviews = _plain_text_fallback("Aida\nОчень долго ждали заказ — 2/5\nAliya\nКофе отличный и сервис быстрый — 5/5", None)
     assert len(reviews) == 2
     assert reviews[0].rating == 2
+    assert reviews[0].author_name == "Aida"
+    assert reviews[0].review_text == "Очень долго ждали заказ"
     assert reviews[0].estimated_sentiment == "negative"
     assert reviews[1].rating == 5
+    assert reviews[1].author_name == "Aliya"
     assert reviews[1].estimated_sentiment == "positive"
 
 
 def test_youtube_video_ids_are_deduplicated_in_page_order():
     html = '"videoId":"3GWEGzQLeWI" other "videoId":"WBzoKTkSCBo" duplicate "videoId":"3GWEGzQLeWI"'
     assert extract_youtube_video_ids(html) == ["3GWEGzQLeWI", "WBzoKTkSCBo"]
+
+
+def test_collector_language_detection_handles_ru_kk_and_mixed_text():
+    assert detect_language("Очень хороший сервис") == "ru"
+    assert detect_language("Қызмет өте жақсы") == "kk"
+    assert detect_language("Қызмет жақсы, но доставка медленная") == "mixed"
