@@ -1,5 +1,10 @@
 import { apiAuthHeaders, completeWorkspace, consumeAuthCallback, db, isSupabaseConfigured, loadWorkspace, resendConfirmation, restoreSession, sendPasswordRecovery, signIn, signOut, signUp, updatePassword } from './supabase-client.js';
 
+try {
+  const embeddedConfig = document.querySelector('#sarap-config')?.textContent;
+  if (embeddedConfig) window.SARAP_CONFIG = { ...(window.SARAP_CONFIG || {}), ...JSON.parse(embeddedConfig) };
+} catch { /* A malformed optional config falls back to the public endpoint below. */ }
+
 const app = document.querySelector('#app');
 const storeKey = 'sarap-mvp-state-v1';
 

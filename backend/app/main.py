@@ -458,7 +458,7 @@ if frontend.exists():
 
     def _frontend_index() -> HTMLResponse:
         html = (frontend / "index.html").read_text(encoding="utf-8")
-        inline_config = f"<script>window.SARAP_CONFIG = {json.dumps(_browser_safe_config())};</script>"
+        inline_config = f'<script id="sarap-config" type="application/json">{json.dumps(_browser_safe_config())}</script>'
         html = re.sub(r'<script src="config\.js\?v=\d+"></script>', inline_config, html, count=1)
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
