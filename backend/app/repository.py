@@ -182,6 +182,43 @@ class SupabaseRepository:
     async def update_source(self, source_id: str, values: dict[str, Any]) -> None:
         await self.request("PATCH", "source_connections", params={"id": f"eq.{source_id}"}, json=values)
 
+    async def upsert_source_credential(self, *, source_id: str, business_id: UUID, provider: str, encrypted_token: str, expires_at: datetime | None) -> dict[str, Any]:
+        rows = await self.request(
+            "POST",
+            "source_credentials",
+            params={"on_conflict": "source_connection_id"},
+            json={
+                "source_connection_id": source_id,
+                "business_id": str(business_id),
+                "provider": provider,
+                "encrypted_token": encrypted_token,
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        return rows[0]
+
+    async def get_source_credential(self, *, source_id: str, business_id: UUID) -> dict[str, Any] | None:
+        rows = await self.request(
+            "GET",
+            "source_credentials",
+            params={
+                "select": "source_connection_id,business_id,provider,encrypted_token,expires_at,updated_at",
+                "source_connection_id": f"eq.{source_id}",
+                "business_id": f"eq.{business_id}",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    async def delete_source_credential(self, *, source_id: str, business_id: UUID) -> None:
+        await self.request(
+            "DELETE",
+            "source_credentials",
+            params={"source_connection_id": f"eq.{source_id}", "business_id": f"eq.{business_id}"},
+        )
+
     async def admin_bundle(self) -> dict[str, Any]:
         businesses = await self.request("GET", "businesses", params={"select": "*", "order": "created_at.desc", "limit": "200"})
         sources = await self.request("GET", "source_connections", params={"select": "*", "order": "updated_at.desc", "limit": "500"})

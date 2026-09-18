@@ -82,11 +82,17 @@ def needs_strong_model(result: AIAnalysis) -> bool:
     )
 
 
+def _ensure_summary(result: AIAnalysis, text: str) -> AIAnalysis:
+    if result.summary.strip():
+        return result
+    return result.model_copy(update={"summary": " ".join(text.split())[:160]})
+
+
 async def analyze_with_cascade(text: str) -> AIAnalysis:
     """Groq first, Gemini only when needed; deterministic local fallback without keys."""
     if os.getenv("GROQ_API_KEY"):
         try:
-            first = await GroqProvider().analyze(text)
+            first = _ensure_summary(await GroqProvider().analyze(text), text)
         except (httpx.HTTPError, KeyError, ValueError):
             first = local_fallback(text)
     else:
@@ -94,11 +100,11 @@ async def analyze_with_cascade(text: str) -> AIAnalysis:
 
     if needs_strong_model(first) and os.getenv("GEMINI_API_KEY"):
         try:
-            strong = await GeminiProvider().analyze(text)
+            strong = _ensure_summary(await GeminiProvider().analyze(text), text)
             return strong.model_copy(update={"escalated": True})
         except (httpx.HTTPError, KeyError, ValueError):
             pass
-    return first
+    return _ensure_summary(first, text)
 
 
 async def generate_business_recommendations(text: str) -> dict:

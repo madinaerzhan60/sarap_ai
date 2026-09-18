@@ -58,7 +58,7 @@ PYTHONPATH=. python3 -m pytest
 ## Supabase
 
 1. Create a Supabase project.
-2. For a new project, run `supabase/schema.sql`, then `supabase/migrations/20260917_product_admin.sql` in the SQL editor. For an existing SARAP database, run `supabase/migrations/20260917_auth_accounts.sql` and then `supabase/migrations/20260917_product_admin.sql` once.
+2. For a new project, run `supabase/schema.sql`, then the files in `supabase/migrations/` in filename order. For an existing SARAP database, apply every migration that has not yet been applied, including `20260918_per_business_source_credentials.sql`.
 3. In **Authentication → Providers → Email**, enable Email and **Confirm email**.
 4. In **Authentication → URL Configuration**, set the local Site URL to `http://127.0.0.1:8000` and add `http://127.0.0.1:8000/` to Redirect URLs. Add the deployed HTTPS address before launch.
 5. Put the project URL and anon key in `backend/.env`. The anon key is browser-safe only with Row Level Security enabled. Never put the service-role key in the frontend.
@@ -71,6 +71,16 @@ SARAP_ADMIN_EMAIL=admin@example.com SARAP_TEST_EMAIL=test@example.com python3 sc
 ```
 
 The script requires `SUPABASE_SERVICE_ROLE_KEY`, generates strong one-time passwords, gives only the admin account the platform role, and deliberately leaves the test account without a workspace so onboarding starts cleanly.
+
+Google Business and Instagram OAuth access/refresh tokens are accepted only by the protected `/api/sources/{source_id}/credentials` backend endpoint. The backend encrypts the complete token payload with `SOURCE_TOKEN_ENCRYPTION_KEY`, binds the ciphertext to `business_id`, `source_connection_id` and provider, and stores it in the server-only `source_credentials` table. Customer OAuth tokens must not be added to `.env`.
+
+Run the two-client Supabase isolation journey on a migrated non-production project:
+
+```bash
+RUN_SUPABASE_INTEGRATION=1 PYTHONPATH=. python3 -m pytest -q tests/test_multitenancy_supabase.py
+```
+
+The test creates two confirmed fixture accounts, completes onboarding for two separate workspaces, adds a source and data to each, verifies API authorization and direct Supabase RLS in both directions, then deletes its fixture users and businesses.
 
 When served through FastAPI, the frontend reads the browser-safe Supabase URL and anon key from `/api/public-config`; secrets remain server-side. Registration creates a Supabase Auth user, waits for email confirmation, and then creates the user's profile, business membership, aliases and source connections. A standalone file can show the explicit demo workspace but does not create fake accounts.
 
@@ -88,6 +98,7 @@ When served through FastAPI, the frontend reads the browser-safe Supabase URL an
 - `backend/app/services/risk.py`: explainable 0–100 risk score
 - `backend/app/services/polling.py`: adaptive near-real-time schedule
 - `backend/app/services/telegram.py`: Telegram alert formatter and sender
+- `backend/app/services/source_credentials.py`: AES-GCM encryption bound to one workspace, source and provider
 - `backend/app/workers.py`: lightweight in-process job queue
 - `backend/app/security.py`: Supabase session verification and workspace membership checks
 

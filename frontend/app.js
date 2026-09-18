@@ -160,12 +160,35 @@ function exportMentionsCsv(items){
   const csv=[header,...items.map(item=>[item.text,item.sentiment,`${Math.round(item.confidence*100)}%`,item.summary])].map(row=>row.map(value=>`"${String(value||'').replaceAll('"','""')}"`).join(',')).join('\n');
   const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));link.download='sarap-mentions.csv';link.click();URL.revokeObjectURL(link.href);
 }
-function mentionTableRow(item){const confidence=Math.round(item.confidence*100);return `<tr data-mention-row="${item.id}"><td><strong title="${escapeHtml(item.text)}">${escapeHtml(item.text.slice(0,120))}${item.text.length>120?'…':''}</strong></td><td><span class="tag ${item.sentiment==='positive'?'pos':item.sentiment==='negative'?'neg':''}">${escapeHtml(item.sentiment)}</span></td><td><div class="progress-row"><div><span></span><strong>${confidence}%</strong></div><i><b style="width:${confidence}%"></b></i></div></td><td>${escapeHtml(item.summary||'Summary unavailable')}</td></tr>`;}
+function fallbackMentionSummary(item){
+  const text=String(item.text||'').replace(/\s+/g,' ').trim();
+  if(!text)return 'No text available for analysis.';
+  const excerpt=text.length>155?`${text.slice(0,152).trim()}…`:text;
+  const hasCyrillic=/[А-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]/.test(excerpt);
+  if(hasCyrillic){
+    const labels={positive:'Положительный отзыв',negative:'Проблема',mixed:'Смешанный отзыв',neutral:'Нейтральное упоминание'};
+    return `${labels[item.sentiment]||'Упоминание'}: ${excerpt}`;
+  }
+  const labels={positive:'Positive feedback',negative:'Reported issue',mixed:'Mixed feedback',neutral:'Neutral mention'};
+  return `${labels[item.sentiment]||'Mention'}: ${excerpt}`;
+}
+function mentionTableRow(item){
+  const confidence=Math.max(0,Math.min(100,Math.round(Number(item.confidence||0)*100)));
+  const confidenceTone=confidence>=80?'high':confidence>=60?'medium':'low';
+  const sentiment=String(item.sentiment||'neutral').toLowerCase();
+  const summary=String(item.summary||'').trim()||fallbackMentionSummary(item);
+  return `<tr data-mention-row="${item.id}">
+    <td class="review-cell"><strong title="${escapeHtml(item.text)}">${escapeHtml(item.text.slice(0,150))}${item.text.length>150?'…':''}</strong><small>${escapeHtml(item.source||'Unknown source')} · ${escapeHtml(item.author||'Unknown author')}</small></td>
+    <td><span class="sentiment-pill ${sentiment}"><i></i>${escapeHtml(sentiment)}</span></td>
+    <td><div class="confidence-cell ${confidenceTone}"><div><strong>${confidence}%</strong><span>${confidenceTone==='high'?'High':confidenceTone==='medium'?'Medium':'Low'}</span></div><b><i style="width:${confidence}%"></i></b></div></td>
+    <td><p class="mention-summary">${escapeHtml(summary)}</p></td>
+  </tr>`;
+}
 function mentions(){
   const all=state.mentions.filter(item=>mentionSentimentFilter==='all'||item.sentiment===mentionSentimentFilter);
   const actions='<button class="btn btn-secondary" data-action="export-csv">Export CSV</button><button class="btn btn-secondary" data-action="extract-reviews">Paste text / HTML</button><button class="btn btn-primary" data-action="add-mention">+ Add mention</button>';
   const pills=['all','positive','negative','neutral'].map(value=>`<button class="btn btn-quiet ${mentionSentimentFilter===value?'active':''}" data-sentiment-filter="${value}">${value[0].toUpperCase()+value.slice(1)}</button>`).join('');
-  return pageHead('Mentions','Every review, post, article and discussion in one normalized feed.',actions)+(all.length?`<div class="toolbar"><div class="nav-actions">${pills}</div><input class="search" id="mention-search" type="search" placeholder="Search text, source or author…"></div><div class="table-wrap"><table><thead><tr><th>Review</th><th>Sentiment</th><th>Confidence</th><th>Summary</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No mentions collected','Paste copied page content or add one mention manually. SARAP will extract, normalize and analyze it.','extract-reviews','Paste text / HTML'));
+  return pageHead('Mentions','Every review, post, article and discussion in one normalized feed.',actions)+(all.length?`<div class="toolbar"><div class="nav-actions">${pills}</div><input class="search" id="mention-search" type="search" placeholder="Search text, source or author…"></div><div class="table-wrap mentions-table-wrap glass"><table class="mentions-table"><colgroup><col class="review-col"><col class="sentiment-col"><col class="confidence-col"><col class="summary-col"></colgroup><thead><tr><th>Review</th><th>Sentiment</th><th>Confidence</th><th>Summary</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No mentions collected','Paste copied page content or add one mention manually. SARAP will extract, normalize and analyze it.','extract-reviews','Paste text / HTML'));
 }
 
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
@@ -288,7 +311,7 @@ function applyWorkspace(payload) {
   return Boolean(business.onboarding_completed);
 }
 
-function mapProcessed(row){const m=row.mention||{},a=row.analysis||{},r=row.risk||{};return {id:m.id,source:m.source,type:m.source_type==='social_post'||m.source_type==='social_comment'?'social':m.source_type==='news_article'?'news':m.source_type||'review',author:m.author_name||'Unknown author',time:m.published_at?new Date(m.published_at).toLocaleString():new Date(m.collected_at).toLocaleString(),text:m.text||'',summary:a.summary||'',confidence:Number(a.confidence||0),rating:m.rating,language:a.language||m.language||'Unknown',sentiment:a.sentiment||'neutral',risk:r.score||0,aspects:(a.aspects||[]).map(x=>[x.aspect,x.sentiment==='positive'?'pos':x.sentiment==='negative'?'neg':'neutral']),reviewed:Boolean(m.reviewed)};}
+function mapProcessed(row){const m=row.mention||{},a=row.analysis||{},r=row.risk||{};const item={id:m.id,source:m.source,type:m.source_type==='social_post'||m.source_type==='social_comment'?'social':m.source_type==='news_article'?'news':m.source_type||'review',author:m.author_name||'Unknown author',time:m.published_at?new Date(m.published_at).toLocaleString():new Date(m.collected_at).toLocaleString(),text:m.text||'',summary:a.summary||'',confidence:Number(a.confidence||0),rating:m.rating,language:a.language||m.language||'Unknown',sentiment:a.sentiment||'neutral',risk:r.score||0,aspects:(a.aspects||[]).map(x=>[x.aspect,x.sentiment==='positive'?'pos':x.sentiment==='negative'?'neg':'neutral']),reviewed:Boolean(m.reviewed)};if(!item.summary.trim())item.summary=fallbackMentionSummary(item);return item;}
 async function loadProductData(){
   if(state.session?.demo||!state.business?.id)return;
   const headers=await apiAuthHeaders();

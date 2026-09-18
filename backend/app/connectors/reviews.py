@@ -320,7 +320,7 @@ class InstagramFallbackConnector(BaseConnector):
                     lambda: InstagramScraper(
                         cast(SupabaseRawReviewStore, None),
                         proxy_pool,
-                        os.getenv("INSTAGRAM_STORAGE_STATE"),
+                        None,
                     ),
                 ),
                 SociaVaultProvider(os.getenv("SOCIAVAULT_API_KEY")),
@@ -502,7 +502,58 @@ class GoogleBusinessReviewsConnector(BaseConnector):
         return items
 
 
-def connector_for(source: dict[str, Any]) -> BaseConnector:
+class InstagramGraphCommentsConnector(BaseConnector):
+    """Official Instagram Graph API connector using one workspace's OAuth token."""
+
+    source = "instagram"
+    connection_type = ConnectionType.official
+    collection_method = "api"
+
+    def __init__(self, access_token: str, instagram_user_id: str | None = None, media_id: str | None = None) -> None:
+        if not access_token or not (instagram_user_id or media_id):
+            raise ConnectorUnavailable("Instagram OAuth credentials require instagram_user_id or media_id")
+        self.access_token = access_token
+        self.instagram_user_id = instagram_user_id
+        self.media_id = media_id
+
+    async def _get(self, client: httpx.AsyncClient, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        version = os.getenv("META_GRAPH_API_VERSION", "v23.0").strip()
+        base = os.getenv("META_GRAPH_API_BASE", "https://graph.facebook.com").rstrip("/")
+        response = await client.get(f"{base}/{version}/{path.lstrip('/')}", params={**params, "access_token": self.access_token})
+        if response.status_code >= 400:
+            detail = response.json().get("error", {}).get("message") if response.headers.get("content-type", "").startswith("application/json") else None
+            raise ConnectorUnavailable(f"Instagram API rejected the source credential: {detail or response.status_code}")
+        return response.json()
+
+    async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+        async with httpx.AsyncClient(timeout=20) as client:
+            media_ids = [self.media_id] if self.media_id else []
+            if not media_ids and self.instagram_user_id:
+                media = await self._get(client, f"{self.instagram_user_id}/media", {"fields": "id,permalink", "limit": 10})
+                media_ids = [str(row["id"]) for row in media.get("data", []) if row.get("id")]
+            items: list[RawItem] = []
+            for media_id in media_ids:
+                comments = await self._get(client, f"{media_id}/comments", {"fields": "id,text,username,timestamp,like_count", "limit": 100})
+                for comment in comments.get("data", []):
+                    comment_id = str(comment.get("id") or "")
+                    if comment_id == last_seen_item_id:
+                        return items
+                    text = str(comment.get("text") or "").strip()
+                    if not comment_id or not text:
+                        continue
+                    items.append(RawItem(
+                        source=self.source,
+                        source_type=MentionType.social_comment,
+                        external_id=comment_id,
+                        author_name=str(comment.get("username") or "").strip() or None,
+                        text=text,
+                        published_at=comment.get("timestamp"),
+                        metadata={"collection_method": "official_api", "media_id": media_id, "likes_count": int(comment.get("like_count") or 0)},
+                    ))
+        return items
+
+
+def connector_for(source: dict[str, Any], credentials: dict[str, Any] | None = None) -> BaseConnector:
     name = str(source["source"]).lower().strip()
     mode = str(source.get("collection_mode", "auto"))
     if name in {"2gis", "2gis maps"} and mode == "auto" and os.getenv("ENABLE_DEMO_CONNECTORS", "false").lower() == "true":
@@ -513,6 +564,12 @@ def connector_for(source: dict[str, Any]) -> BaseConnector:
         if not page_url:
             raise ConnectorUnavailable("2GIS collection requires the business page URL")
         return TwoGisPlaywrightConnector(str(page_url))
+    if name in {"instagram", "instagram comments"} and credentials and mode in {"auto", "api"}:
+        return InstagramGraphCommentsConnector(
+            credentials.get("access_token", ""),
+            credentials.get("instagram_user_id"),
+            credentials.get("media_id"),
+        )
     if name in {"instagram", "instagram comments"} and mode in {"auto", "scraper"}:
         page_url = source.get("source_url")
         if not page_url:
@@ -524,15 +581,14 @@ def connector_for(source: dict[str, Any]) -> BaseConnector:
             raise ConnectorUnavailable("YouTube collection requires a public channel URL")
         return YouTubePublicConnector(str(page_url))
     if mode in {"auto", "api"} and name in {"google", "google business", "google_business"}:
-        credentials = (
-            os.getenv("GOOGLE_BUSINESS_ACCESS_TOKEN", ""),
-            os.getenv("GOOGLE_BUSINESS_ACCOUNT_ID", ""),
-            os.getenv("GOOGLE_BUSINESS_LOCATION_ID", ""),
-        )
-        if all(credentials):
-            return GoogleBusinessReviewsConnector(*credentials)
+        if credentials:
+            return GoogleBusinessReviewsConnector(
+                credentials.get("access_token", ""),
+                credentials.get("account_id", ""),
+                credentials.get("location_id", ""),
+            )
         if mode == "api":
-            raise ConnectorUnavailable("Google Business API is selected but its credentials are not configured")
+            raise ConnectorUnavailable("Google Business OAuth is not connected for this workspace source")
     if mode == "api":
         raise ConnectorUnavailable(f"No official API connector is configured for {source['source']}")
     page_url = source.get("source_url")

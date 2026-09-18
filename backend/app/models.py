@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, SecretStr
 
 
 class ConnectionType(StrEnum):
@@ -94,6 +94,16 @@ class SourceCreate(BaseModel):
 class SourceUpdate(BaseModel):
     source_url: HttpUrl | None = None
     collection_mode: CollectionMode = CollectionMode.auto
+
+
+class SourceOAuthCredential(BaseModel):
+    access_token: SecretStr
+    refresh_token: SecretStr | None = None
+    expires_at: datetime | None = None
+    account_id: str | None = Field(default=None, max_length=500)
+    location_id: str | None = Field(default=None, max_length=500)
+    instagram_user_id: str | None = Field(default=None, max_length=500)
+    media_id: str | None = Field(default=None, max_length=500)
 
 
 class DiscoveryRequest(BaseModel):

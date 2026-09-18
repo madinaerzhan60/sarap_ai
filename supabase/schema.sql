@@ -71,7 +71,9 @@ create table public.source_connections (
 
 create table public.source_credentials (
   id uuid primary key default gen_random_uuid(),
-  source_connection_id uuid not null references public.source_connections on delete cascade,
+  source_connection_id uuid not null unique references public.source_connections on delete cascade,
+  business_id uuid not null references public.businesses on delete cascade,
+  provider text not null check (provider in ('google_business', 'instagram')),
   encrypted_token text not null,
   expires_at timestamptz,
   created_at timestamptz not null default now(),
@@ -247,6 +249,7 @@ alter table public.business_members enable row level security;
 alter table public.business_locations enable row level security;
 alter table public.brand_aliases enable row level security;
 alter table public.source_connections enable row level security;
+alter table public.source_credentials enable row level security;
 alter table public.mentions enable row level security;
 alter table public.mention_revisions enable row level security;
 alter table public.ai_analysis enable row level security;

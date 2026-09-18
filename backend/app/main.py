@@ -18,12 +18,13 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from app.connectors.reviews import ConnectorUnavailable, connector_for
 from app.connectors.search import FreeSearchProvider, fan_out
-from app.models import DiscoveryRequest, ExtractedReview, MentionType, ProcessedMention, RawItem, ReviewExtractionRequest, ReviewImportRequest, SourceCreate, SourceUpdate
+from app.models import DiscoveryRequest, ExtractedReview, MentionType, ProcessedMention, RawItem, ReviewExtractionRequest, ReviewImportRequest, SourceCreate, SourceOAuthCredential, SourceUpdate
 from app.services.llm import analyze_with_cascade, generate_business_recommendations
 from app.services.normalization import normalize
 from app.services.review_extraction import ReviewExtractionUnavailable, extract_reviews, review_external_id
 from app.services.risk import calculate
 from app.services.telegram import send_alert
+from app.services.source_credentials import CredentialEncryptionError, SourceCredentialVault
 from app.security import AuthContext, require_admin_context, require_business_member, require_user
 from app.repository import RepositoryUnavailable, repository
 
@@ -223,6 +224,81 @@ async def create_source(source: SourceCreate, context: AuthContext = Depends(req
     return payload
 
 
+def _oauth_provider(source_name: str) -> str:
+    normalized = source_name.lower().strip()
+    if normalized in {"google", "google business", "google_business"}:
+        return "google_business"
+    if normalized in {"instagram", "instagram comments"}:
+        return "instagram"
+    raise HTTPException(422, "Encrypted OAuth credentials are supported for Google Business and Instagram")
+
+
+@app.put("/api/sources/{source_id}/credentials")
+async def save_source_credentials(source_id: UUID, credential: SourceOAuthCredential, context: AuthContext = Depends(require_user)) -> dict:
+    if not repository.configured:
+        raise HTTPException(503, "Supabase is required for encrypted source credentials")
+    source = await repository.get_source(str(source_id))
+    if not source:
+        raise HTTPException(404, "Source not found")
+    business_id = UUID(source["business_id"])
+    await require_business_member(context, business_id)
+    provider = _oauth_provider(str(source["source"]))
+    if provider == "google_business" and not (credential.account_id and credential.location_id):
+        raise HTTPException(422, "Google Business requires account_id and location_id")
+    if provider == "instagram" and not (credential.instagram_user_id or credential.media_id):
+        raise HTTPException(422, "Instagram requires instagram_user_id or media_id")
+    payload = {
+        "access_token": credential.access_token.get_secret_value(),
+        "refresh_token": credential.refresh_token.get_secret_value() if credential.refresh_token else None,
+        "account_id": credential.account_id,
+        "location_id": credential.location_id,
+        "instagram_user_id": credential.instagram_user_id,
+        "media_id": credential.media_id,
+    }
+    try:
+        encrypted = SourceCredentialVault().encrypt(
+            payload,
+            business_id=business_id,
+            source_connection_id=source_id,
+            provider=provider,
+        )
+        row = await repository.upsert_source_credential(
+            source_id=str(source_id), business_id=business_id, provider=provider,
+            encrypted_token=encrypted, expires_at=credential.expires_at,
+        )
+    except CredentialEncryptionError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    await repository.update_source(str(source_id), {"status": "active", "error_message": None})
+    return {"source_id": str(source_id), "provider": provider, "configured": True, "expires_at": row.get("expires_at")}
+
+
+@app.get("/api/sources/{source_id}/credentials")
+async def source_credentials_status(source_id: UUID, context: AuthContext = Depends(require_user)) -> dict:
+    if not repository.configured:
+        raise HTTPException(503, "Supabase is required for encrypted source credentials")
+    source = await repository.get_source(str(source_id))
+    if not source:
+        raise HTTPException(404, "Source not found")
+    business_id = UUID(source["business_id"])
+    await require_business_member(context, business_id)
+    row = await repository.get_source_credential(source_id=str(source_id), business_id=business_id)
+    return {"source_id": str(source_id), "provider": row.get("provider") if row else _oauth_provider(str(source["source"])), "configured": bool(row), "expires_at": row.get("expires_at") if row else None}
+
+
+@app.delete("/api/sources/{source_id}/credentials")
+async def disconnect_source_credentials(source_id: UUID, context: AuthContext = Depends(require_user)) -> dict:
+    if not repository.configured:
+        raise HTTPException(503, "Supabase is required for encrypted source credentials")
+    source = await repository.get_source(str(source_id))
+    if not source:
+        raise HTTPException(404, "Source not found")
+    business_id = UUID(source["business_id"])
+    await require_business_member(context, business_id)
+    await repository.delete_source_credential(source_id=str(source_id), business_id=business_id)
+    await repository.update_source(str(source_id), {"status": "oauth_required", "error_message": None})
+    return {"source_id": str(source_id), "configured": False}
+
+
 @app.post("/api/sources/{source_id}/poll", response_model=list[ProcessedMention])
 async def poll_source(source_id: str, context: AuthContext = Depends(require_user)) -> list[ProcessedMention]:
     source = await repository.get_source(source_id) if repository.configured else next((s for s in sources if s["id"] == source_id), None)
@@ -230,14 +306,27 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
         raise HTTPException(404, "Source not found")
     await require_business_member(context, UUID(source["business_id"]))
     try:
-        connector = connector_for(source)
+        credential_payload = None
+        if repository.configured:
+            credential_row = await repository.get_source_credential(source_id=source_id, business_id=UUID(source["business_id"]))
+            if credential_row:
+                expires_at = credential_row.get("expires_at")
+                if expires_at and datetime.fromisoformat(expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc):
+                    raise ConnectorUnavailable("The source OAuth token has expired; reconnect this source")
+                credential_payload = SourceCredentialVault().decrypt(
+                    credential_row["encrypted_token"],
+                    business_id=source["business_id"],
+                    source_connection_id=source_id,
+                    provider=credential_row["provider"],
+                )
+        connector = connector_for(source, credential_payload)
         last_seen_item_id = source.get("last_seen_item_id")
         if repository.configured and last_seen_item_id:
             complete = await repository.external_item_is_complete(UUID(source["business_id"]), str(source["source"]), last_seen_item_id)
             if not complete:
                 last_seen_item_id = None
         items = await connector.fetch_latest(last_seen_item_id)
-    except ConnectorUnavailable as exc:
+    except (ConnectorUnavailable, CredentialEncryptionError) as exc:
         if repository.configured:
             await repository.update_source(source_id, {"status": "error", "error_message": str(exc), "last_checked_at": datetime.now(timezone.utc).isoformat()})
         raise HTTPException(409, str(exc)) from exc
