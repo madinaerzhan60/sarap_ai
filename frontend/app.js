@@ -642,6 +642,6 @@ document.addEventListener('input',e=>{if(e.target.id==='mention-search'){const q
 document.addEventListener('change',e=>{if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();});
 
 app.innerHTML='<main class="center-shell"><section class="form-card glass"><h2>Opening SARAP…</h2><p>Checking your secure session.</p><div class="skeleton"></div></section></main>';
-await loadPublicConfig();
+void loadPublicConfig();
 await initializeAuth();
 render();
