@@ -49,12 +49,21 @@ function normalizeSession(payload) {
 async function request(url, options = {}) {
   if (!isSupabaseConfigured()) throw new Error('Supabase is not configured yet');
   const headers = { apikey: config().SUPABASE_ANON_KEY, 'Content-Type': 'application/json', ...(options.headers || {}) };
-  const response = await fetch(url, { ...options, headers });
-  const text = await response.text();
-  let payload = null;
-  try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
-  if (!response.ok) throw new Error(payload?.msg || payload?.message || payload?.error_description || payload?.error || `Request failed (${response.status})`);
-  return payload;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch(url, { ...options, headers, signal: controller.signal });
+    const text = await response.text();
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
+    if (!response.ok) throw new Error(payload?.msg || payload?.message || payload?.error_description || payload?.error || `Request failed (${response.status})`);
+    return payload;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('The secure connection timed out. Please try again.');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function refreshSession(session) {
@@ -78,7 +87,11 @@ export async function restoreSession() {
     session.user = user;
     writeSession(session);
     return session;
-  } catch {
+  } catch (error) {
+    if (/timed out|failed to fetch|network|load failed/i.test(String(error?.message || error))) {
+      writeSession(null);
+      return null;
+    }
     return refreshSession(session);
   }
 }
