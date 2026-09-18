@@ -375,7 +375,7 @@ async function initializeAuth() {
 
 async function authSubmit(form) {
   const data=fieldData(form);
-  if(!isSupabaseConfigured()){toast('Accounts are temporarily unavailable','Open SARAP from the main local address and try again.');return;}
+  if(!isSupabaseConfigured()){toast('Account setup is incomplete','Supabase is not connected to this deployment yet.');return;}
   if(state.route==='register'&&data.password!==data.passwordConfirm){toast('Passwords do not match','Enter the same password twice.');return;}
   form.classList.add('loading');
   try {
