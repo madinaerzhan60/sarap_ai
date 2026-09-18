@@ -70,6 +70,7 @@ const emptyBusiness = {id:null,name:'',website:'',industry:'',country:'Kazakhsta
 let state = loadState();
 let currentSettingsTab = 'Business';
 let authReady = false;
+let pendingExtractedReviews = [];
 
 function loadState() {
   try { return { ...structuredClone(defaultState), ...JSON.parse(localStorage.getItem(storeKey) || '{}') }; }
@@ -149,7 +150,8 @@ function mentionCard(m) {
 
 function mentions() {
   const all=[...state.mentions,...state.discoveries];
-  return pageHead('Mentions','Every review, post, article and discussion in one normalized feed.','<button class="btn btn-secondary" data-action="add-mention">+ Add mention</button>')+(all.length?`<div class="toolbar"><input class="search" id="mention-search" type="search" placeholder="Search text, source or author…"><select class="filter" id="type-filter"><option value="all">All types</option><option value="review">Reviews</option><option value="social">Social</option><option value="news">News</option><option value="forum">Forums</option></select><select class="filter" id="risk-filter"><option value="all">All risks</option><option value="high">High + Critical</option><option value="medium">Medium</option><option value="low">Low</option></select></div><section class="mention-list" id="mention-list">${all.map(mentionCard).join('')}</section><section class="empty glass hidden" id="mentions-empty"><div class="empty-icon">${icons.mentions}</div><h3>No matching mentions</h3><p>Try clearing one of the filters.</p></section>`:emptyState('No mentions collected','Connect a source or add a mention manually to test the analysis pipeline.','add-mention','Add first mention'));
+  const actions='<button class="btn btn-secondary" data-action="extract-reviews">Paste text / HTML</button><button class="btn btn-primary" data-action="add-mention">+ Add mention</button>';
+  return pageHead('Mentions','Every review, post, article and discussion in one normalized feed.',actions)+(all.length?`<div class="toolbar"><input class="search" id="mention-search" type="search" placeholder="Search text, source or author…"><select class="filter" id="type-filter"><option value="all">All types</option><option value="review">Reviews</option><option value="social">Social</option><option value="news">News</option><option value="forum">Forums</option></select><select class="filter" id="risk-filter"><option value="all">All risks</option><option value="high">High + Critical</option><option value="medium">Medium</option><option value="low">Low</option></select></div><section class="mention-list" id="mention-list">${all.map(mentionCard).join('')}</section><section class="empty glass hidden" id="mentions-empty"><div class="empty-icon">${icons.mentions}</div><h3>No matching mentions</h3><p>Try clearing one of the filters.</p></section>`:emptyState('No mentions collected','Paste copied page content or add one mention manually. SARAP will extract, normalize and analyze it.','extract-reviews','Paste text / HTML'));
 }
 
 function analytics() {
@@ -381,6 +383,17 @@ function providerSearchUrl(provider,query,city){
 function addMentionModal() {
   modal(`<div class="modal-head"><div><h2>Add a demo mention</h2><p>Runs normalization, deduplication, aspect analysis and risk scoring.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="mention"><div class="field-grid"><div class="field"><label>Source</label><select name="source"><option>2GIS</option><option>Google</option><option>Instagram</option><option>Web</option></select></div><div class="field"><label>Rating</label><input name="rating" type="number" min="1" max="5" value="2"></div></div><div class="field"><label>Customer feedback</label><textarea name="text" required placeholder="Кофе күшті, бірақ сервис өте баяу..."></textarea></div><div class="form-actions"><span></span><button class="btn btn-primary">Analyze mention</button></div></form>`);
 }
+
+function reviewExtractionModal() {
+  const platforms=['2GIS','Google Maps','Yandex Maps','Instagram','Threads','TikTok','Telegram','YouTube','News','Forum_Blog'];
+  modal(`<div class="modal-head"><div><h2>Extract reviews</h2><p>Paste copied page text or HTML. SARAP removes interface noise, spam and duplicates.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="review-extract"><div class="field-grid"><div class="field"><label>Platform</label><select name="platformHint"><option value="">Detect automatically</option>${platforms.map(x=>`<option>${x}</option>`).join('')}</select></div><div class="field"><label>Page URL <span class="muted">(optional)</span></label><input name="sourceUrl" type="url" placeholder="https://..."></div></div><div class="field"><label>Copied text or HTML</label><textarea class="extraction-input" name="content" required maxlength="120000" placeholder="Paste the page content here..."></textarea></div><div class="extraction-rules"><span>✓ Business replies stay separate</span><span>✓ Relative dates are preserved</span><span>✓ Repeated reviews are removed</span></div><div class="form-actions"><span class="muted" style="font-size:11px">Groq → Gemini fallback</span><button class="btn btn-primary">Extract reviews</button></div></form>`);
+}
+
+function extractedReviewsModal() {
+  const cards=pendingExtractedReviews.map((item,index)=>`<label class="extracted-review"><input type="checkbox" data-extracted-index="${index}" checked><span><strong>${escapeHtml(item.source_platform)} · ${escapeHtml(item.author_name||'Unknown')}</strong><small>${item.rating?`${item.rating}/5 · `:''}${escapeHtml(item.language)} · ${escapeHtml(item.publish_date||item.date_raw||'No date')}</small><p>${escapeHtml(item.review_text)}</p>${item.meta_info?.business_reply?`<em>Business reply: ${escapeHtml(item.meta_info.business_reply)}</em>`:''}</span><b class="status ${item.estimated_sentiment==='negative'?'high':item.estimated_sentiment==='positive'?'live':''}">${escapeHtml(item.estimated_sentiment)}</b></label>`).join('');
+  closeModal();
+  modal(`<div class="modal-head"><div><h2>${pendingExtractedReviews.length} review${pendingExtractedReviews.length===1?'':'s'} found</h2><p>Review the extracted data before saving it to this workspace.</p></div><button class="close" data-action="close-modal">×</button></div><div class="extracted-list">${cards}</div><div class="form-actions"><button class="btn btn-secondary" data-action="extract-reviews">← Paste again</button><button class="btn btn-primary" data-action="import-extracted">Import selected</button></div>`);
+}
 function analyzeDemo(text,rating) {
   const negative=/(груб|долго|баяу|дөрекі|жаман|ужас|күту|wait|late|fraud|отрав)/i.test(text); const positive=/(жақсы|керемет|күшті|вкусн|хорош|great|good)/i.test(text);
   const aspects=[]; if(/кофе|еда|дәм|food|product/i.test(text)) aspects.push(['Product',positive?'pos':'neg']); if(/кассир|персонал|груб|дөрекі|staff/i.test(text)) aspects.push(['Staff','neg']); if(/долго|баяу|күту|wait|late/i.test(text)) aspects.push(['Wait time','neg']); if(!aspects.length) aspects.push(['Overall',negative?'neg':'pos']);
@@ -423,6 +436,22 @@ document.addEventListener('click', async e => {
     try{await pollBackendSource(source);}catch(error){source.errors+=1;source.status='Needs attention';source.state='high';saveState();render();toast('Collection unavailable',error.message);}
   }
   if(action==='add-mention')addMentionModal();
+  if(action==='extract-reviews'){closeModal();reviewExtractionModal();}
+  if(action==='import-extracted'){
+    const selected=[...document.querySelectorAll('[data-extracted-index]:checked')].map(x=>pendingExtractedReviews[Number(x.dataset.extractedIndex)]).filter(Boolean);
+    if(!selected.length){toast('Nothing selected','Select at least one extracted review.');return;}
+    if(state.session?.demo){toast('Sign in required','AI extraction imports into a saved workspace.');return;}
+    target.disabled=true;target.textContent='Importing…';
+    try{
+      const response=await fetch(apiPath('/api/reviews/import'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({business_id:state.business.id,reviews:selected})});
+      const body=await response.json();
+      if(!response.ok)throw new Error(body.detail||'Import failed');
+      const imported=body.filter(x=>!x.duplicate).length;
+      const duplicates=body.length-imported;
+      pendingExtractedReviews=[];closeModal();await loadProductData();render();
+      toast('Reviews imported',`${imported} saved${duplicates?`, ${duplicates} duplicate${duplicates===1?'':'s'} skipped`:''}.`);
+    }catch(error){target.disabled=false;target.textContent='Import selected';toast('Could not import reviews',error.message);}
+  }
   if(action==='alert-status'){const a=state.alerts.find(x=>x.id===target.dataset.id);a.status=a.status==='Resolved'?'New':'Resolved';if(!state.session?.demo)await db(`/alerts?id=eq.${a.id}`,{method:'PATCH',body:{status:a.status.toLowerCase(),resolved_at:a.status==='Resolved'?new Date().toISOString():null}});saveState();render();}
   if(action==='configure-alerts'){currentSettingsTab='Alerts';setRoute('settings');}
   if(action==='scan-web'){const list=document.querySelector('#discover-list');if(list)list.innerHTML='<div class="skeleton"></div><div class="skeleton"></div>';try{if(state.session?.demo){setTimeout(()=>{render();toast('Demo scan complete','Sample web discoveries are shown.');},500);}else{const response=await fetch(apiPath('/api/discover'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({business_id:state.business.id,brand_name:state.business.name,aliases:state.business.aliases,city:state.business.city,country:state.business.country})});if(!response.ok)throw new Error((await response.json()).detail||'Discovery failed');await loadProductData();render();toast('Web scan complete',`${state.discoveries.length} relevant discoveries saved.`);}}catch(error){render();toast('Web scan unavailable',error.message);}}
@@ -443,6 +472,18 @@ document.addEventListener('submit', async e => {
   if(kind==='forgot'){const d=fieldData(form);form.classList.add('loading');try{await sendPasswordRecovery(d.email);state.pendingEmail=d.email;state.route='login';saveState();render();toast('Recovery email sent','Open the link in your inbox to choose a new password.');}catch(error){form.classList.remove('loading');toast('Could not send recovery email',error.message);}}
   if(kind==='reset-password'){const d=fieldData(form);if(d.password!==d.passwordConfirm){toast('Passwords do not match','Enter the same password twice.');return;}form.classList.add('loading');try{await updatePassword(d.password);const workspace=await loadWorkspace();const complete=applyWorkspace(workspace);if(complete)await loadProductData();state.route=complete?'overview':'onboarding';saveState();render();toast('Password updated','Your new password is active.');}catch(error){form.classList.remove('loading');toast('Could not update password',error.message);}}
   if(kind==='onboarding')await onboardingSubmit(form);
+  if(kind==='review-extract'){
+    if(state.session?.demo){toast('Sign in required','AI extraction is available inside a saved workspace.');return;}
+    const d=fieldData(form);form.classList.add('loading');
+    try{
+      const response=await fetch(apiPath('/api/reviews/extract'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({business_id:state.business.id,content:d.content,platform_hint:d.platformHint||null,source_url:d.sourceUrl||null})});
+      const body=await response.json();
+      if(!response.ok)throw new Error(body.detail||'Extraction failed');
+      pendingExtractedReviews=body;
+      if(!body.length){form.classList.remove('loading');toast('No reviews found','SARAP did not find genuine customer reviews in this content.');return;}
+      extractedReviewsModal();
+    }catch(error){form.classList.remove('loading');toast('Could not extract reviews',error.message);}
+  }
   if(kind==='source'){
     const d=fieldData(form);
     if(['Google Business','Instagram'].includes(d.name)&&d.method==='auto'&&!d.url)d.method='api';

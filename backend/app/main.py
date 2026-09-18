@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+from datetime import datetime, time, timezone
 from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, HTTPException
@@ -14,9 +15,10 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from app.connectors.reviews import ConnectorUnavailable, connector_for
 from app.connectors.search import FreeSearchProvider, fan_out
-from app.models import DiscoveryRequest, ProcessedMention, RawItem, SourceCreate
+from app.models import DiscoveryRequest, ExtractedReview, MentionType, ProcessedMention, RawItem, ReviewExtractionRequest, ReviewImportRequest, SourceCreate
 from app.services.llm import analyze_with_cascade
 from app.services.normalization import normalize
+from app.services.review_extraction import ReviewExtractionUnavailable, extract_reviews, review_external_id
 from app.services.risk import calculate
 from app.services.telegram import send_alert
 from app.security import AuthContext, require_admin_context, require_business_member, require_user
@@ -89,6 +91,56 @@ async def list_mentions(business_id: UUID, context: AuthContext = Depends(requir
     if repository.configured:
         return await repository.list_processed(business_id)
     return [x for x in processed if x.mention.business_id == business_id]
+
+
+@app.post("/api/reviews/extract", response_model=list[ExtractedReview])
+async def extract_review_content(request: ReviewExtractionRequest, context: AuthContext = Depends(require_user)) -> list[ExtractedReview]:
+    await require_business_member(context, request.business_id)
+    try:
+        reviews = await extract_reviews(request.content, request.platform_hint, request.source_url)
+    except ReviewExtractionUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return reviews
+
+
+@app.post("/api/reviews/import", response_model=list[ProcessedMention])
+async def import_extracted_reviews(request: ReviewImportRequest, context: AuthContext = Depends(require_user)) -> list[ProcessedMention]:
+    await require_business_member(context, request.business_id)
+    social = {"Instagram", "Threads", "TikTok", "Telegram"}
+    results: list[ProcessedMention] = []
+    for review in request.reviews:
+        platform = review.source_platform.value
+        source_type = MentionType.review
+        if platform in social:
+            source_type = MentionType.social_comment
+        elif platform == "YouTube":
+            source_type = MentionType.video_comment
+        elif platform == "News":
+            source_type = MentionType.news_article
+        elif platform == "Forum_Blog":
+            source_type = MentionType.forum
+        published_at = datetime.combine(review.publish_date, time.min, timezone.utc) if review.publish_date else None
+        item = RawItem(
+            source=platform,
+            source_type=source_type,
+            external_id=review_external_id(review),
+            author_name=None if review.author_name == "Unknown" else review.author_name,
+            text=review.review_text,
+            rating=review.rating,
+            published_at=published_at,
+            metadata={
+                "origin": "review_extraction_engine",
+                "estimated_sentiment": review.estimated_sentiment,
+                "extracted_language": review.language,
+                "date_raw": review.date_raw,
+                "likes_count": review.likes_count,
+                "is_reply": review.meta_info.is_reply,
+                "business_reply": review.meta_info.business_reply,
+                "extra_details": review.meta_info.extra_details,
+            },
+        )
+        results.append(await process_item(request.business_id, item))
+    return results
 
 
 @app.post("/api/sources")

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -105,3 +105,47 @@ class SearchResult(BaseModel):
     source: str
     published_at: datetime | None = None
     relevance: float = Field(ge=0, le=1)
+
+
+class ReviewPlatform(StrEnum):
+    two_gis = "2GIS"
+    google_maps = "Google Maps"
+    yandex_maps = "Yandex Maps"
+    instagram = "Instagram"
+    threads = "Threads"
+    tiktok = "TikTok"
+    telegram = "Telegram"
+    youtube = "YouTube"
+    news = "News"
+    forum_blog = "Forum_Blog"
+
+
+class ReviewMetaInfo(BaseModel):
+    is_reply: bool = False
+    business_reply: str | None = None
+    extra_details: str | None = None
+
+
+class ExtractedReview(BaseModel):
+    source_platform: ReviewPlatform
+    author_name: str = "Unknown"
+    rating: float | None = Field(default=None, ge=1, le=5)
+    estimated_sentiment: Literal["positive", "negative", "neutral"]
+    language: Literal["ru", "kk", "en", "mixed"]
+    review_text: str = Field(min_length=1, max_length=30_000)
+    publish_date: date | None = None
+    date_raw: str | None = None
+    likes_count: int = Field(default=0, ge=0)
+    meta_info: ReviewMetaInfo = Field(default_factory=ReviewMetaInfo)
+
+
+class ReviewExtractionRequest(BaseModel):
+    business_id: UUID
+    content: str = Field(min_length=1, max_length=120_000)
+    platform_hint: ReviewPlatform | None = None
+    source_url: str | None = None
+
+
+class ReviewImportRequest(BaseModel):
+    business_id: UUID
+    reviews: list[ExtractedReview] = Field(min_length=1, max_length=200)

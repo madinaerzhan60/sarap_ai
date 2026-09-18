@@ -1,11 +1,12 @@
 from uuid import uuid4
 
-from app.models import RawItem
+from app.models import ExtractedReview, RawItem
 from app.services.ai import analyze
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
 from app.connectors.reviews import extract_reviews_from_html
+from app.services.review_extraction import deduplicate_reviews, review_external_id
 
 
 def test_mixed_language_aspects_and_risk():
@@ -46,3 +47,26 @@ def test_review_scraper_extracts_json_ld():
     assert items[0].author_name == "Aida"
     assert items[0].rating == 2
     assert items[0].metadata["collection_method"] == "scraper"
+
+
+def test_extraction_engine_deduplicates_layout_copies():
+    review = ExtractedReview(
+        source_platform="2GIS",
+        author_name="Aida",
+        rating=2,
+        estimated_sentiment="negative",
+        language="ru",
+        review_text="Очень долго ждали заказ",
+        date_raw="2 недели назад",
+        likes_count=0,
+    )
+    duplicate = review.model_copy(update={"review_text": "Очень   долго ждали заказ"})
+    unique = deduplicate_reviews([review, duplicate])
+    assert len(unique) == 1
+    assert unique[0].publish_date is None
+    assert unique[0].date_raw == "2 недели назад"
+
+
+def test_extracted_review_id_is_stable():
+    review = ExtractedReview(source_platform="Instagram", author_name="@aida", estimated_sentiment="positive", language="kk", review_text="Қызмет өте жақсы!", likes_count=4)
+    assert review_external_id(review) == review_external_id(review.model_copy())

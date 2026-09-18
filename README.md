@@ -21,6 +21,7 @@ The repository contains a polished, responsive frontend and a FastAPI backend im
 - Hybrid source collection: official API when configured, focused scraper fallback for customer-supplied public URLs
 - Replaceable connector and web-search interfaces
 - Kazakh, Russian, English and mixed KZ/RU analysis with a Groq → Gemini cascade and deterministic local fallback
+- Review Extraction Engine for pasted text or HTML, with platform detection, strict field validation, business-reply separation and duplicate removal
 - Deterministic risk engine with evidence
 - Telegram Bot API adapter
 - Supabase/PostgreSQL schema, indexes and Row Level Security policies
@@ -48,8 +49,8 @@ PYTHONPATH=. python3 -m pytest
 
 1. Select **View demo** on the landing page.
 2. Open the preconfigured sample workspace and optionally add a monitored source.
-3. Open **Mentions** and choose **Add mention**.
-4. Paste `Кофе күшті, бірақ кассир қыз өте дөрекі екен.` and choose a low rating.
+3. Open **Mentions** and choose **Paste text / HTML** to extract multiple reviews, or **Add mention** for one manual entry.
+4. Paste copied page content, review it in the extraction preview and import the selected records.
 5. SARAP normalizes the item, detects mixed KZ/RU, extracts Product and Staff aspects, calculates risk and creates an alert when the score crosses the threshold.
 6. Add the same text again to see deduplication.
 7. Open **Discover** and run a web scan to see query fan-out and relevance-filtered demo results.
@@ -83,6 +84,7 @@ When served through FastAPI, the frontend reads the browser-safe Supabase URL an
 - `backend/app/services/normalization.py`: canonical text and content hashing
 - `backend/app/services/ai.py`: cheap-first structured demo classifier
 - `backend/app/services/llm.py`: Groq fast pass and Gemini strong-model escalation
+- `backend/app/services/review_extraction.py`: strict multi-platform extraction from copied text and HTML
 - `backend/app/services/risk.py`: explainable 0–100 risk score
 - `backend/app/services/polling.py`: adaptive near-real-time schedule
 - `backend/app/services/telegram.py`: Telegram alert formatter and sender

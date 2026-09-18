@@ -33,7 +33,7 @@ class GroqProvider(LLMProvider):
 
     async def analyze(self, text: str) -> AIAnalysis:
         key = os.environ["GROQ_API_KEY"]
-        model = os.getenv("GROQ_FAST_MODEL", "llama-3.1-8b-instant")
+        model = os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b")
         payload = {
             "model": model,
             "temperature": 0,
@@ -59,7 +59,7 @@ class GeminiProvider(LLMProvider):
 
     async def analyze(self, text: str) -> AIAnalysis:
         key = os.environ["GEMINI_API_KEY"]
-        model = os.getenv("GEMINI_STRONG_MODEL", "gemini-2.5-flash")
+        model = os.getenv("GEMINI_STRONG_MODEL", "gemini-flash-latest")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         payload = {
             "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
@@ -67,7 +67,7 @@ class GeminiProvider(LLMProvider):
             "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
         }
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(url, params={"key": key}, json=payload)
+            response = await client.post(url, headers={"x-goog-api-key": key}, json=payload)
             response.raise_for_status()
         content = response.json()["candidates"][0]["content"]["parts"][0]["text"]
         return AIAnalysis.model_validate(json.loads(_json_text(content)))
