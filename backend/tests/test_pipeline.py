@@ -8,6 +8,9 @@ from app.services.polling import next_poll
 from app.connectors.reviews import TwoGisPlaywrightConnector, extract_reviews_from_html, extract_youtube_video_ids
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
+from app.scrapers.fallback import CollectorProvider, FallbackPipeline, normalize_api_item
+from app.scrapers.models import ScrapedItem
+import asyncio
 
 
 def test_mixed_language_aspects_and_risk():
@@ -99,3 +102,46 @@ def test_collector_language_detection_handles_ru_kk_and_mixed_text():
 def test_twogis_search_url_is_normalized_to_reviews_tab():
     connector = TwoGisPlaywrightConnector("https://2gis.kz/almaty/search/1Fit/firm/70000001035980354/76.88%2C43.23")
     assert connector.page_url == "https://2gis.kz/almaty/firm/70000001035980354/tab/reviews"
+
+
+def test_sociavault_comment_is_normalized():
+    item = normalize_api_item(
+        {
+            "id": "comment-7",
+            "text": "Қызмет өте жақсы",
+            "created_at": "2026-09-18T08:10:00.000Z",
+            "user": {"username": "aida"},
+        },
+        "instagram",
+        "https://instagram.com/p/example/",
+        "sociavault",
+    )
+    assert item is not None
+    assert item.author == "aida"
+    assert item.external_id == "comment-7"
+    assert item.collected_by == "sociavault"
+
+
+def test_fallback_pipeline_uses_next_provider_after_empty_result():
+    class EmptyProvider(CollectorProvider):
+        name = "empty"
+        platform = "instagram"
+
+        async def collect(self, target_url: str, limit: int):
+            return []
+
+    class WorkingProvider(CollectorProvider):
+        name = "working"
+        platform = "instagram"
+
+        async def collect(self, target_url: str, limit: int):
+            return [ScrapedItem(source="Instagram", text_content="Хороший сервис", collected_by=self.name)]
+
+    class MemoryStore:
+        async def save(self, items, batch_size=250):
+            return len(items)
+
+    result = asyncio.run(FallbackPipeline("instagram", [EmptyProvider(), WorkingProvider()], MemoryStore()).collect_data("https://instagram.com/p/example/", 10))
+    assert result["status"] == "ok"
+    assert result["collected_by"] == "working"
+    assert result["saved"] == 1

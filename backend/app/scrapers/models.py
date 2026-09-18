@@ -34,6 +34,7 @@ class ScrapedItem(BaseModel):
     external_id: str | None = None
     url: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    collected_by: str = "unknown"
 
     @field_validator("text_content", "author")
     @classmethod
@@ -59,4 +60,5 @@ class ScrapedItem(BaseModel):
             "language": self.language,
             "url": self.url,
             "metadata": self.metadata,
+            "collected_by": self.collected_by,
         }

@@ -10,3 +10,4 @@ beautifulsoup4==4.13.5
 playwright==1.55.0
 telethon==1.40.0
 google-api-python-client==2.182.0
+apify-client==3.2.0

@@ -52,6 +52,49 @@ def _rating(value: str | None) -> float | None:
     return float(match.group(1).replace(",", ".")) if match else None
 
 
+def extract_map_items(
+    html: str,
+    profile: MapProfile,
+    url: str,
+    limit: int,
+    collected_by: str,
+) -> list[ScrapedItem]:
+    soup = BeautifulSoup(html, "html.parser")
+    cards: list[Any] = []
+    for selector in profile.card_selectors:
+        cards = soup.select(selector)
+        if cards:
+            break
+    items: list[ScrapedItem] = []
+    for index, card in enumerate(cards[:limit]):
+        text = _first_text(card, profile.text_selectors)
+        if not text or len(text) < 8:
+            continue
+        date_raw = _first_text(card, profile.date_selectors)
+        published = None
+        if date_raw:
+            try:
+                published = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+            except ValueError:
+                published = None
+        stable_hash = hashlib.sha256(f"{profile.source}|{text}".encode()).hexdigest()[:24]
+        items.append(
+            ScrapedItem(
+                source=profile.source,
+                author=_first_text(card, profile.author_selectors) or "Unknown",
+                text_content=text,
+                rating=_rating(_first_text(card, profile.rating_selectors)),
+                published_at=published,
+                language="unknown",
+                external_id=card.get("data-review-id") or f"{profile.source}-{index}-{stable_hash}",
+                url=url,
+                metadata={"date_raw": date_raw},
+                collected_by=collected_by,
+            )
+        )
+    return items
+
+
 class PlaywrightMapScraper(BaseScraper):
     def __init__(self, profile: MapProfile, storage: SupabaseRawReviewStore, proxy_pool: ProxyPool) -> None:
         self.profile = profile
@@ -82,34 +125,15 @@ class PlaywrightMapScraper(BaseScraper):
         if "captcha.2gis." in page.url or any(marker in body_text for marker in blocked):
             raise ScraperBlocked(f"{self.source} requested manual verification")
         previous_height = 0
-        for _ in range(12):
+        max_scrolls = min(max(12, limit // 10), int(os.getenv("PLAYWRIGHT_MAX_SCROLLS", "200")))
+        for _ in range(max_scrolls):
             await page.mouse.wheel(0, 1200)
             await asyncio.sleep(0.8)
             height = await page.evaluate("document.body.scrollHeight")
             if height == previous_height:
                 break
             previous_height = height
-        soup = BeautifulSoup(await page.content(), "html.parser")
-        cards: list[Any] = []
-        for selector in self.profile.card_selectors:
-            cards = soup.select(selector)
-            if cards:
-                break
-        items: list[ScrapedItem] = []
-        for index, card in enumerate(cards[:limit]):
-            text = _first_text(card, self.profile.text_selectors)
-            if not text or len(text) < 8:
-                continue
-            date_raw = _first_text(card, self.profile.date_selectors)
-            published = None
-            if date_raw:
-                try:
-                    published = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
-                except ValueError:
-                    published = None
-            stable_hash = hashlib.sha256(f"{self.source}|{text}".encode()).hexdigest()[:24]
-            items.append(ScrapedItem(source=self.source, author=_first_text(card, self.profile.author_selectors) or "Unknown", text_content=text, rating=_rating(_first_text(card, self.profile.rating_selectors)), published_at=published, language="unknown", external_id=card.get("data-review-id") or f"{self.source}-{index}-{stable_hash}", url=query, metadata={"date_raw": date_raw, "collector": "playwright"}))
-        return items
+        return extract_map_items(await page.content(), self.profile, query, limit, "playwright")
 
     async def close(self) -> None:
         if self.context:

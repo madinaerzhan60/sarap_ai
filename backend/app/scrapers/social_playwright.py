@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -47,7 +48,8 @@ class SocialSessionScraper(BaseScraper):
         visible = (await page.locator("body").inner_text()).casefold()
         if any(value in visible for value in ("captcha", "verify you are human", "подтвердите, что вы не робот")):
             raise ScraperBlocked(f"{self.source} requested manual verification")
-        for _ in range(8):
+        max_scrolls = min(max(8, limit // 10), int(os.getenv("PLAYWRIGHT_MAX_SCROLLS", "200")))
+        for _ in range(max_scrolls):
             await page.mouse.wheel(0, 1000)
             await asyncio.sleep(0.8)
         soup = BeautifulSoup(await page.content(), "html.parser")
@@ -62,7 +64,7 @@ class SocialSessionScraper(BaseScraper):
             if len(text) < 8:
                 continue
             stable_hash = hashlib.sha256(f"{self.source}|{text}".encode()).hexdigest()[:24]
-            items.append(ScrapedItem(source=self.source, author="Unknown", text_content=text, language="unknown", external_id=f"{self.source}-{index}-{stable_hash}", url=query, metadata={"collector": "authenticated_playwright"}))
+            items.append(ScrapedItem(source=self.source, author="Unknown", text_content=text, language="unknown", external_id=f"{self.source}-{index}-{stable_hash}", url=query, collected_by="playwright"))
         return items
 
     async def close(self) -> None:
