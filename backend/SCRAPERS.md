@@ -31,9 +31,12 @@ The two high-volume sources use ordered provider chains:
 ```text
 2GIS:      Playwright -> Scrapfly -> configured Apify Actor
 Instagram: Playwright -> SociaVault -> SocialCrawl -> configured Apify Actor
+YouTube:   YouTube Data API -> SociaVault comments
 ```
 
 The next provider runs when the current one is blocked, returns no records, has no credits, or fails. Network and server failures use exponential retry. Authentication, credit, and empty-result errors move directly to the next provider so the worker does not spend credits repeating a request that cannot succeed.
+
+The product source button collects YouTube comments from a video URL or from the most recent videos found on a channel page. Video titles and descriptions are not stored as customer mentions. When `YOUTUBE_API_KEY` is empty, the connector uses the configured SociaVault comments endpoint.
 
 Outscraper is not in the 2GIS chain because its published API catalogue does not provide a 2GIS reviews endpoint. Its map review product is for Google Maps. `ScrapflyProvider` is the real second path for 2GIS HTML.
 

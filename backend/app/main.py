@@ -39,6 +39,19 @@ processed: list[ProcessedMention] = []
 sources: list[dict] = []
 
 
+def _visible_product_mentions(items: list[ProcessedMention]) -> list[ProcessedMention]:
+    """Hide legacy rows created when the old YouTube connector stored video titles."""
+    return [
+        item for item in items
+        if not (
+            item.mention.source.casefold() == "youtube"
+            and item.mention.source_type == MentionType.social_post
+            and item.mention.metadata.get("content_type") == "video"
+            and item.mention.metadata.get("collection_method") == "public_page"
+        )
+    ]
+
+
 async def process_item(business_id: UUID, item: RawItem) -> ProcessedMention:
     mention = normalize(item, business_id)
     if repository.configured:
@@ -94,10 +107,10 @@ async def list_mentions(business_id: UUID, context: AuthContext = Depends(requir
     await require_business_member(context, business_id)
     if repository.configured:
         try:
-            return await repository.list_processed(business_id)
+            return _visible_product_mentions(await repository.list_processed(business_id))
         except RepositoryUnavailable as exc:
             raise HTTPException(503, str(exc)) from exc
-    return [x for x in processed if x.mention.business_id == business_id]
+    return _visible_product_mentions([x for x in processed if x.mention.business_id == business_id])
 
 
 def _period_bounds(days: int) -> tuple[date, date]:
@@ -108,7 +121,7 @@ def _period_bounds(days: int) -> tuple[date, date]:
 @app.get("/api/analytics")
 async def analytics(business_id: UUID, days: int = 30, context: AuthContext = Depends(require_user)) -> dict:
     await require_business_member(context, business_id)
-    mentions = await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id]
+    mentions = _visible_product_mentions(await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id])
     start, end = _period_bounds(days)
     rows = [item for item in mentions if item.mention.collected_at.date() >= start]
     counts = Counter(item.analysis.sentiment for item in rows)
@@ -128,7 +141,7 @@ async def recommendations(business_id: UUID, days: int = 30, refresh: bool = Fal
                 return existing
         except RepositoryUnavailable:
             pass
-    mentions = await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id]
+    mentions = _visible_product_mentions(await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id])
     rows = [item for item in mentions if item.mention.collected_at.date() >= start]
     source = "\n".join(f"{item.analysis.sentiment}: {item.analysis.summary or item.mention.text[:220]}" for item in rows[-50:])
     payload = await generate_business_recommendations(source or "No customer mentions are available for this period.")

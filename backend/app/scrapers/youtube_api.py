@@ -31,14 +31,14 @@ class YouTubeApiScraper(BaseScraper):
         items: list[ScrapedItem] = []
         if video.get("items"):
             snippet = video["items"][0]["snippet"]
-            items.append(ScrapedItem(source=self.source, author=snippet.get("channelTitle", "Unknown"), text_content="\n".join(filter(None, [snippet.get("title"), snippet.get("description")])), published_at=datetime.fromisoformat(snippet["publishedAt"].replace("Z", "+00:00")), language="unknown", external_id=f"video-{video_id}", url=f"https://youtube.com/watch?v={video_id}", metadata={"kind": "video"}))
+            items.append(ScrapedItem(source=self.source, author=snippet.get("channelTitle", "Unknown"), text_content="\n".join(filter(None, [snippet.get("title"), snippet.get("description")])), published_at=datetime.fromisoformat(snippet["publishedAt"].replace("Z", "+00:00")), language="unknown", external_id=f"video-{video_id}", url=f"https://youtube.com/watch?v={video_id}", metadata={"kind": "video"}, collected_by="youtube_api"))
         token = None
         while len(items) < limit:
             response = await asyncio.to_thread(lambda page_token=token: self.client.commentThreads().list(part="snippet", videoId=video_id, maxResults=min(100, limit - len(items)), pageToken=page_token, textFormat="plainText", order="time").execute())
             for row in response.get("items", []):
                 comment = row["snippet"]["topLevelComment"]
                 snippet = comment["snippet"]
-                items.append(ScrapedItem(source=self.source, author=snippet.get("authorDisplayName", "Unknown"), text_content=snippet["textDisplay"], published_at=datetime.fromisoformat(snippet["publishedAt"].replace("Z", "+00:00")), language="unknown", external_id=comment["id"], url=f"https://youtube.com/watch?v={video_id}&lc={comment['id']}", metadata={"kind": "comment", "likes": snippet.get("likeCount", 0)}))
+                items.append(ScrapedItem(source=self.source, author=snippet.get("authorDisplayName", "Unknown"), text_content=snippet["textDisplay"], published_at=datetime.fromisoformat(snippet["publishedAt"].replace("Z", "+00:00")), language="unknown", external_id=comment["id"], url=f"https://youtube.com/watch?v={video_id}&lc={comment['id']}", metadata={"kind": "comment", "likes": snippet.get("likeCount", 0)}, collected_by="youtube_api"))
             token = response.get("nextPageToken")
             if not token:
                 break

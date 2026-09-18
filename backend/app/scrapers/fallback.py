@@ -98,13 +98,15 @@ def normalize_api_item(row: dict[str, Any], platform: str, target_url: str, coll
     except (TypeError, ValueError):
         parsed_rating = None
     external_id = str(_first(row, "id", "comment_id", "commentId", "review_id", "reviewId", default="")) or None
-    published = _datetime(_first(row, "created_at", "createdAt", "published_at", "publishedAt", "date", "timestamp"))
+    published = _datetime(_first(row, "created_at", "createdAt", "published_at", "publishedAt", "publishedTime", "dateCreated", "date", "timestamp"))
     metadata = {
-        "likes_count": _first(row, "likes_count", "likes", "likeCount", "engagement.likes", default=0),
+        "likes_count": _first(row, "likes_count", "likesCount", "likes", "likeCount", "engagement.likes", default=0),
+        "business_reply": _first(row, "replyText", "business_reply"),
         "raw_provider_fields": sorted(row.keys()),
     }
+    source_names = {"2gis": "2GIS", "instagram": "Instagram", "youtube": "YouTube"}
     return ScrapedItem(
-        source="2GIS" if platform == "2gis" else "Instagram",
+        source=source_names.get(platform, platform),
         author=str(author or "Unknown"),
         text_content=content,
         rating=parsed_rating,
@@ -125,8 +127,8 @@ class PlaywrightProvider(CollectorProvider):
 
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
         scraper = self.scraper_factory()
-        await scraper.connect()
         try:
+            await scraper.connect()
             return scraper.clean_data(await scraper.scrape(target_url, limit))
         finally:
             await scraper.close()
@@ -217,6 +219,48 @@ class SocialCrawlProvider(CollectorProvider):
         return results
 
 
+class SociaVaultYouTubeProvider(CollectorProvider):
+    name = "sociavault"
+    platform = "youtube"
+    endpoint = "https://api.sociavault.com/v1/scrape/youtube/video/comments"
+
+    def __init__(self, api_key: str | None) -> None:
+        self.api_key = (api_key or "").strip()
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key)
+
+    async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
+        if not self.configured:
+            raise ProviderNotConfigured("SOCIAVAULT_API_KEY is empty")
+        results: list[ScrapedItem] = []
+        continuation: str | None = None
+        seen_tokens: set[str] = set()
+        async with httpx.AsyncClient(timeout=60) as client:
+            while len(results) < limit:
+                params = {"url": target_url, "order": "newest"}
+                if continuation:
+                    params["continuationToken"] = continuation
+                response = await client.get(self.endpoint, headers={"X-API-Key": self.api_key}, params=params)
+                _raise_for_provider_status(response, self.name)
+                payload = response.json()
+                data = payload.get("data", {}) if isinstance(payload, dict) else {}
+                for row in _list(data.get("comments")):
+                    item = normalize_api_item(row, self.platform, target_url, self.name)
+                    if item:
+                        item.metadata["is_reply"] = bool(row.get("replyLevel"))
+                        results.append(item)
+                        if len(results) >= limit:
+                            break
+                next_token = data.get("continuationToken") if isinstance(data, dict) else None
+                if not next_token or next_token in seen_tokens:
+                    break
+                seen_tokens.add(str(next_token))
+                continuation = str(next_token)
+        return results
+
+
 class ScrapflyProvider(CollectorProvider):
     name = "scrapfly"
     endpoint = "https://api.scrapfly.io/scrape"
@@ -267,27 +311,37 @@ class ApifyProvider(CollectorProvider):
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
         if not self.configured:
             raise ProviderNotConfigured(f"APIFY_API_TOKEN or APIFY_{self.platform.upper()}_ACTOR_ID is empty")
-        from apify_client import ApifyClientAsync
-
         maximum = min(limit, int(os.getenv("APIFY_MAX_ITEMS_PER_RUN", "1000")))
         if self.input_json:
             run_input = json.loads(self.input_json)
+        elif self.platform == "2gis" and self.actor_id == "getascraper/2gis-reviews-scraper":
+            run_input = {
+                "urls": [target_url],
+                "maxItemsPerFirm": maximum,
+                "withTextOnly": True,
+                "includeRawData": False,
+            }
         elif self.platform == "instagram":
             run_input = {"directUrls": [target_url], "resultsLimit": maximum}
         else:
             run_input = {"startUrls": [{"url": target_url}], "maxItems": maximum}
-        client = ApifyClientAsync(self.token)
-        run = await client.actor(self.actor_id).call(run_input=run_input)
-        if not run:
-            return []
-        dataset_id = getattr(run, "default_dataset_id", None)
-        if not dataset_id and isinstance(run, dict):
-            dataset_id = run.get("defaultDatasetId")
-        if not dataset_id:
-            raise ProviderError("apify: actor run returned no default dataset")
-        page = await client.dataset(dataset_id).list_items(limit=maximum, clean=True)
+        actor_path = self.actor_id.replace("/", "~")
+        endpoint = f"https://api.apify.com/v2/acts/{actor_path}/run-sync-get-dataset-items"
+        timeout_seconds = int(os.getenv("APIFY_RUN_TIMEOUT_SECONDS", "300"))
+        async with httpx.AsyncClient(timeout=timeout_seconds + 30) as client:
+            response = await client.post(
+                endpoint,
+                params={"token": self.token, "timeout": timeout_seconds, "clean": "true"},
+                json=run_input,
+            )
+        _raise_for_provider_status(response, self.name)
+        rows = response.json()
+        if not isinstance(rows, list):
+            raise ProviderError("apify: actor returned an unexpected response")
         results: list[ScrapedItem] = []
-        for row in page.items:
+        for row in rows[:maximum]:
+            if not isinstance(row, dict):
+                continue
             item = normalize_api_item(row, self.platform, target_url, self.name)
             if item:
                 results.append(item)
@@ -296,7 +350,7 @@ class ApifyProvider(CollectorProvider):
 
 def _raise_for_provider_status(response: httpx.Response, provider: str) -> None:
     if response.status_code in {401, 403}:
-        raise ProviderError(f"{provider}: authentication or access denied ({response.status_code})")
+        raise ProviderError(f"{provider}: API key is invalid, expired, or denied ({response.status_code})")
     if response.status_code in {402, 429}:
         raise ProviderError(f"{provider}: credits or rate limit reached ({response.status_code})")
     try:

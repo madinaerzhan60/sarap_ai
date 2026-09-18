@@ -365,8 +365,26 @@ def extract_youtube_video_ids(html: str) -> list[str]:
     return result
 
 
+def youtube_video_id(value: str) -> str | None:
+    parsed = urlparse(value)
+    if parsed.hostname in {"youtu.be", "www.youtu.be"}:
+        candidate = parsed.path.strip("/").split("/")[0]
+    elif parsed.hostname in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+        if parsed.path == "/watch":
+            from urllib.parse import parse_qs
+
+            candidate = parse_qs(parsed.query).get("v", [""])[0]
+        elif parsed.path.startswith(("/shorts/", "/live/")):
+            candidate = parsed.path.strip("/").split("/")[1]
+        else:
+            return None
+    else:
+        return None
+    return candidate if re.fullmatch(r"[A-Za-z0-9_-]{11}", candidate or "") else None
+
+
 class YouTubePublicConnector(BaseConnector):
-    """Collect public videos displayed by a channel without requiring an API key."""
+    """Collect comments from recent public videos, never video titles as mentions."""
 
     source = "youtube"
     connection_type = ConnectionType.monitored
@@ -376,26 +394,77 @@ class YouTubePublicConnector(BaseConnector):
         self.page_url = _safe_public_url(page_url)
 
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+        from typing import cast
+
+        from app.scrapers.fallback import SociaVaultYouTubeProvider
+        from app.scrapers.storage import SupabaseRawReviewStore
+        from app.scrapers.youtube_api import YouTubeApiScraper
+
         timeout = float(os.getenv("CRAWLER_TIMEOUT_SECONDS", "20"))
         headers = {"User-Agent": "Mozilla/5.0 SARAP/1.0", "Accept-Language": "ru,en;q=0.8"}
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, headers=headers) as client:
-            response = await _public_get(client, self.page_url)
-            response.raise_for_status()
-            ids = extract_youtube_video_ids(response.text)
-            items: list[RawItem] = []
-            for video_id in ids[:12]:
-                external_id = f"youtube-video-{video_id}"
-                if external_id == last_seen_item_id:
-                    break
-                video_url = f"https://www.youtube.com/watch?v={video_id}"
-                metadata_response = await _public_get(client, f"https://www.youtube.com/oembed?url={video_url}&format=json")
-                if metadata_response.status_code != 200:
-                    continue
-                payload = metadata_response.json()
-                title = str(payload.get("title") or "").strip()
-                if not title:
-                    continue
-                items.append(RawItem(source=self.source, source_type=MentionType.social_post, external_id=external_id, external_url=video_url, author_name=str(payload.get("author_name") or "YouTube channel"), text=title, metadata={"collection_method": "public_page", "content_type": "video"}))
+        direct_id = youtube_video_id(self.page_url)
+        if direct_id:
+            ids = [direct_id]
+        else:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, headers=headers) as client:
+                response = await _public_get(client, self.page_url)
+                response.raise_for_status()
+                ids = extract_youtube_video_ids(response.text)
+        if not ids:
+            raise ConnectorUnavailable("No public videos were found on this YouTube page")
+
+        max_videos = max(1, int(os.getenv("YOUTUBE_MAX_VIDEOS_PER_SYNC", "2")))
+        total_limit = max(1, int(os.getenv("YOUTUBE_COMMENTS_PER_SYNC", "100")))
+        per_video = max(1, total_limit // min(max_videos, len(ids)))
+        api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+        social_provider = SociaVaultYouTubeProvider(os.getenv("SOCIAVAULT_API_KEY"))
+        scraped = []
+        failures: list[str] = []
+        provider_used: str | None = None
+
+        for video_id in ids[:max_videos]:
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            video_items = []
+            if api_key:
+                scraper = YouTubeApiScraper(cast(SupabaseRawReviewStore, None), api_key)
+                try:
+                    await scraper.connect()
+                    api_items = await scraper.scrape(video_id, per_video + 1)
+                    video_items = [item for item in api_items if item.metadata.get("kind") == "comment"][:per_video]
+                    if video_items:
+                        provider_used = "youtube_api"
+                except Exception as exc:
+                    failures.append(f"youtube_api: {type(exc).__name__}")
+                finally:
+                    await scraper.close()
+            if not video_items and social_provider.configured:
+                try:
+                    video_items = await social_provider.collect(video_url, per_video)
+                    if video_items:
+                        provider_used = "sociavault"
+                except Exception as exc:
+                    failures.append(f"sociavault: {exc}")
+            scraped.extend(video_items)
+            if len(scraped) >= total_limit:
+                break
+
+        if not scraped or not provider_used:
+            if not api_key and not social_provider.configured:
+                failures.append("YOUTUBE_API_KEY and SOCIAVAULT_API_KEY are empty")
+            raise ConnectorUnavailable("YouTube comment collection failed. " + "; ".join(failures))
+        self.collection_method = provider_used
+        items = [RawItem(
+            source=self.source,
+            source_type=MentionType.video_comment,
+            external_id=item.stable_id(),
+            external_url=item.url,
+            author_name=None if item.author == "Unknown" else item.author,
+            text=item.text_content,
+            published_at=item.published_at,
+            metadata={**item.metadata, "language": item.language, "collected_by": provider_used},
+        ) for item in scraped[:total_limit]]
+        if last_seen_item_id:
+            items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
         return items
 
 

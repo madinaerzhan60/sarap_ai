@@ -5,7 +5,7 @@ from app.services.ai import analyze
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
-from app.connectors.reviews import InstagramFallbackConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids
+from app.connectors.reviews import InstagramFallbackConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
 from app.scrapers.fallback import CollectorProvider, FallbackPipeline, normalize_api_item
@@ -93,6 +93,13 @@ def test_youtube_video_ids_are_deduplicated_in_page_order():
     assert extract_youtube_video_ids(html) == ["3GWEGzQLeWI", "WBzoKTkSCBo"]
 
 
+def test_youtube_video_url_variants_are_parsed():
+    assert youtube_video_id("https://www.youtube.com/watch?v=3GWEGzQLeWI") == "3GWEGzQLeWI"
+    assert youtube_video_id("https://youtu.be/3GWEGzQLeWI") == "3GWEGzQLeWI"
+    assert youtube_video_id("https://www.youtube.com/shorts/3GWEGzQLeWI") == "3GWEGzQLeWI"
+    assert youtube_video_id("https://www.youtube.com/@channel") is None
+
+
 def test_collector_language_detection_handles_ru_kk_and_mixed_text():
     assert detect_language("Очень хороший сервис") == "ru"
     assert detect_language("Қызмет өте жақсы") == "kk"
@@ -125,6 +132,47 @@ def test_sociavault_comment_is_normalized():
     assert item.author == "aida"
     assert item.external_id == "comment-7"
     assert item.collected_by == "sociavault"
+
+
+def test_sociavault_youtube_comment_is_normalized():
+    item = normalize_api_item(
+        {
+            "id": "yt-comment-1",
+            "content": "Очень полезное видео",
+            "publishedTime": "2026-09-18T08:10:00.000Z",
+            "author": {"name": "@aida"},
+            "engagement": {"likes": 7},
+        },
+        "youtube",
+        "https://www.youtube.com/watch?v=3GWEGzQLeWI",
+        "sociavault",
+    )
+    assert item is not None
+    assert item.source == "YouTube"
+    assert item.author == "@aida"
+    assert item.metadata["likes_count"] == 7
+
+
+def test_apify_2gis_review_is_normalized():
+    item = normalize_api_item(
+        {
+            "id": "257144389",
+            "rating": 5,
+            "text": "Отличный сервис",
+            "dateCreated": "2026-07-10T18:03:17+07:00",
+            "likesCount": 3,
+            "authorName": "Александра",
+            "replyText": "Спасибо!",
+        },
+        "2gis",
+        "https://2gis.kz/almaty/firm/1/tab/reviews",
+        "apify",
+    )
+    assert item is not None
+    assert item.source == "2GIS"
+    assert item.author == "Александра"
+    assert item.rating == 5
+    assert item.metadata["business_reply"] == "Спасибо!"
 
 
 def test_fallback_pipeline_uses_next_provider_after_empty_result():
