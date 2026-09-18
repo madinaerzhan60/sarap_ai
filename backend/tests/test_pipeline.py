@@ -5,7 +5,7 @@ from app.services.ai import analyze
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
-from app.connectors.reviews import extract_reviews_from_html, extract_youtube_video_ids
+from app.connectors.reviews import TwoGisPlaywrightConnector, extract_reviews_from_html, extract_youtube_video_ids
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
 
@@ -94,3 +94,8 @@ def test_collector_language_detection_handles_ru_kk_and_mixed_text():
     assert detect_language("Очень хороший сервис") == "ru"
     assert detect_language("Қызмет өте жақсы") == "kk"
     assert detect_language("Қызмет жақсы, но доставка медленная") == "mixed"
+
+
+def test_twogis_search_url_is_normalized_to_reviews_tab():
+    connector = TwoGisPlaywrightConnector("https://2gis.kz/almaty/search/1Fit/firm/70000001035980354/76.88%2C43.23")
+    assert connector.page_url == "https://2gis.kz/almaty/firm/70000001035980354/tab/reviews"

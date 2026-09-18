@@ -225,14 +225,18 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
                 last_seen_item_id = None
         items = await connector.fetch_latest(last_seen_item_id)
     except ConnectorUnavailable as exc:
+        if repository.configured:
+            await repository.update_source(source_id, {"status": "error", "error_message": str(exc), "last_checked_at": datetime.now(timezone.utc).isoformat()})
         raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
+        if repository.configured:
+            message = f"Source collection failed: {type(exc).__name__}"
+            await repository.update_source(source_id, {"status": "error", "error_message": message, "last_checked_at": datetime.now(timezone.utc).isoformat()})
         raise HTTPException(502, f"Source collection failed: {type(exc).__name__}") from exc
     if items:
         source["last_seen_item_id"] = items[0].external_id
     source["active_collection_method"] = getattr(connector, "collection_method", connector.connection_type.value)
     if repository.configured:
-        from datetime import datetime, timezone
         await repository.update_source(source_id, {"last_seen_item_id": source.get("last_seen_item_id"), "active_collection_method": source["active_collection_method"], "last_checked_at": datetime.now(timezone.utc).isoformat(), "status": "active", "error_message": None})
     results = [await process_item(UUID(source["business_id"]), item) for item in items]
     return results

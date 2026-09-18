@@ -248,15 +248,19 @@ class TwoGisPlaywrightConnector(BaseConnector):
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         from typing import cast
 
+        from app.scrapers.base import ScraperBlocked
         from app.scrapers.maps_playwright import TwoGisScraper
         from app.scrapers.proxy_pool import ProxyPool
         from app.scrapers.storage import SupabaseRawReviewStore
 
         proxies = [value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()]
         scraper = TwoGisScraper(cast(SupabaseRawReviewStore, None), ProxyPool(proxies))
-        await scraper.connect()
         try:
+            await scraper.connect()
             scraped = await scraper.scrape(self.page_url, limit=50)
+        except ScraperBlocked as exc:
+            proxy_hint = "Configure WEBSHARE_PROXY_URLS and retry." if not proxies else "The current proxy was also blocked; rotate the Webshare proxy pool."
+            raise ConnectorUnavailable(f"2GIS blocked automated access with CAPTCHA. {proxy_hint}") from exc
         finally:
             await scraper.close()
         items = [RawItem(

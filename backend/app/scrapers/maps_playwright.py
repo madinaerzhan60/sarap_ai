@@ -78,8 +78,8 @@ class PlaywrightMapScraper(BaseScraper):
         page = await self.context.new_page()
         await page.goto(query, wait_until="domcontentloaded", timeout=45_000)
         body_text = (await page.locator("body").inner_text()).casefold()
-        blocked = ("captcha", "капча", "подтвердите, что вы не робот", "access denied")
-        if any(marker in body_text for marker in blocked):
+        blocked = ("captcha", "капча", "подтвердите, что вы не робот", "подозрительную активность", "access denied")
+        if "captcha.2gis." in page.url or any(marker in body_text for marker in blocked):
             raise ScraperBlocked(f"{self.source} requested manual verification")
         previous_height = 0
         for _ in range(12):
