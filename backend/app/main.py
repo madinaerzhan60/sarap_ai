@@ -449,11 +449,11 @@ if frontend.exists():
 
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(frontend / "index.html")
+        return FileResponse(frontend / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
     @app.get("/{filename:path}")
     def frontend_file(filename: str) -> FileResponse:
         candidate = (frontend / filename).resolve()
         if candidate.is_file() and frontend.resolve() in candidate.parents:
-            return FileResponse(candidate)
-        return FileResponse(frontend / "index.html")
+            return FileResponse(candidate, headers={"Cache-Control": "no-cache, must-revalidate"})
+        return FileResponse(frontend / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})
