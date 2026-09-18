@@ -5,7 +5,7 @@ from app.services.ai import analyze
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
-from app.connectors.reviews import TwoGisPlaywrightConnector, extract_reviews_from_html, extract_youtube_video_ids
+from app.connectors.reviews import InstagramFallbackConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
 from app.scrapers.fallback import CollectorProvider, FallbackPipeline, normalize_api_item
@@ -102,6 +102,11 @@ def test_collector_language_detection_handles_ru_kk_and_mixed_text():
 def test_twogis_search_url_is_normalized_to_reviews_tab():
     connector = TwoGisPlaywrightConnector("https://2gis.kz/almaty/search/1Fit/firm/70000001035980354/76.88%2C43.23")
     assert connector.page_url == "https://2gis.kz/almaty/firm/70000001035980354/tab/reviews"
+
+
+def test_instagram_source_uses_fallback_connector():
+    connector = connector_for({"source": "Instagram", "collection_mode": "auto", "source_url": "https://www.instagram.com/p/example/"})
+    assert isinstance(connector, InstagramFallbackConnector)
 
 
 def test_sociavault_comment_is_normalized():

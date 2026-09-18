@@ -248,21 +248,31 @@ class TwoGisPlaywrightConnector(BaseConnector):
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         from typing import cast
 
-        from app.scrapers.base import ScraperBlocked
+        from app.scrapers.fallback import ApifyProvider, FallbackPipeline, PlaywrightProvider, ScrapflyProvider
         from app.scrapers.maps_playwright import TwoGisScraper
         from app.scrapers.proxy_pool import ProxyPool
         from app.scrapers.storage import SupabaseRawReviewStore
 
         proxies = [value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()]
-        scraper = TwoGisScraper(cast(SupabaseRawReviewStore, None), ProxyPool(proxies))
-        try:
-            await scraper.connect()
-            scraped = await scraper.scrape(self.page_url, limit=50)
-        except ScraperBlocked as exc:
-            proxy_hint = "Configure WEBSHARE_PROXY_URLS and retry." if not proxies else "The current proxy was also blocked; rotate the Webshare proxy pool."
-            raise ConnectorUnavailable(f"2GIS blocked automated access with CAPTCHA. {proxy_hint}") from exc
-        finally:
-            await scraper.close()
+        proxy_pool = ProxyPool(proxies)
+        pipeline = FallbackPipeline(
+            "2gis",
+            [
+                PlaywrightProvider("2gis", lambda: TwoGisScraper(cast(SupabaseRawReviewStore, None), proxy_pool)),
+                ScrapflyProvider("2gis", os.getenv("SCRAPFLY_API_KEY")),
+                ApifyProvider(
+                    "2gis",
+                    os.getenv("APIFY_API_TOKEN"),
+                    os.getenv("APIFY_2GIS_ACTOR_ID"),
+                    os.getenv("APIFY_2GIS_INPUT_JSON"),
+                ),
+            ],
+        )
+        scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=100)
+        if not scraped or not provider:
+            detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)
+            raise ConnectorUnavailable(f"2GIS collection failed through every configured method. {detail}")
+        self.collection_method = provider
         items = [RawItem(
             source=self.source,
             source_type=MentionType.review,
@@ -272,7 +282,72 @@ class TwoGisPlaywrightConnector(BaseConnector):
             text=item.text_content,
             rating=item.rating,
             published_at=item.published_at,
-            metadata={**item.metadata, "language": item.language},
+            metadata={**item.metadata, "language": item.language, "collected_by": provider, "fallbacks": failures},
+        ) for item in scraped]
+        if last_seen_item_id:
+            items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
+        return items
+
+
+class InstagramFallbackConnector(BaseConnector):
+    """Collect public Instagram comments through the configured provider cascade."""
+
+    source = "instagram"
+    connection_type = ConnectionType.monitored
+    collection_method = "playwright"
+
+    def __init__(self, page_url: str) -> None:
+        self.page_url = _safe_public_url(page_url)
+        host = (urlparse(self.page_url).hostname or "").lower()
+        if host not in {"instagram.com", "www.instagram.com"}:
+            raise ConnectorUnavailable("Instagram collection requires an instagram.com post or reel URL")
+
+    async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+        from typing import cast
+
+        from app.scrapers.fallback import ApifyProvider, FallbackPipeline, PlaywrightProvider, SociaVaultProvider, SocialCrawlProvider
+        from app.scrapers.proxy_pool import ProxyPool
+        from app.scrapers.social_playwright import InstagramScraper
+        from app.scrapers.storage import SupabaseRawReviewStore
+
+        proxies = [value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()]
+        proxy_pool = ProxyPool(proxies)
+        pipeline = FallbackPipeline(
+            "instagram",
+            [
+                PlaywrightProvider(
+                    "instagram",
+                    lambda: InstagramScraper(
+                        cast(SupabaseRawReviewStore, None),
+                        proxy_pool,
+                        os.getenv("INSTAGRAM_STORAGE_STATE"),
+                    ),
+                ),
+                SociaVaultProvider(os.getenv("SOCIAVAULT_API_KEY")),
+                SocialCrawlProvider(os.getenv("SOCIALCRAWL_API_KEY")),
+                ApifyProvider(
+                    "instagram",
+                    os.getenv("APIFY_API_TOKEN"),
+                    os.getenv("APIFY_INSTAGRAM_ACTOR_ID"),
+                    os.getenv("APIFY_INSTAGRAM_INPUT_JSON"),
+                ),
+            ],
+        )
+        scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=500)
+        if not scraped or not provider:
+            detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)
+            raise ConnectorUnavailable(f"Instagram collection failed through every configured method. {detail}")
+        self.collection_method = provider
+        items = [RawItem(
+            source=self.source,
+            source_type=MentionType.social_comment,
+            external_id=item.stable_id(),
+            external_url=item.url,
+            author_name=None if item.author == "Unknown" else item.author,
+            text=item.text_content,
+            rating=item.rating,
+            published_at=item.published_at,
+            metadata={**item.metadata, "language": item.language, "collected_by": provider, "fallbacks": failures},
         ) for item in scraped]
         if last_seen_item_id:
             items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
@@ -369,6 +444,11 @@ def connector_for(source: dict[str, Any]) -> BaseConnector:
         if not page_url:
             raise ConnectorUnavailable("2GIS collection requires the business page URL")
         return TwoGisPlaywrightConnector(str(page_url))
+    if name in {"instagram", "instagram comments"} and mode in {"auto", "scraper"}:
+        page_url = source.get("source_url")
+        if not page_url:
+            raise ConnectorUnavailable("Instagram collection requires a public post or reel URL")
+        return InstagramFallbackConnector(str(page_url))
     if name in {"youtube", "youtube channel"} and mode in {"auto", "scraper"}:
         page_url = source.get("source_url")
         if not page_url:

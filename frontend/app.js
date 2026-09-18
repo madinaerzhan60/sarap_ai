@@ -258,13 +258,16 @@ async function pollBackendSource(source) {
 
 function mapStoredSource(source) {
   const labels={auto:'Automatic',api:'Connected account',scraper:'Public page'};
+  const collectorLabels={playwright:'Browser',scrapfly:'Scrapfly',sociavault:'SociaVault',socialcrawl:'SocialCrawl',apify:'Apify'};
   const kind={official:'Official',monitored:'Monitored',provider:'Provider',imported:'Imported'}[source.connection_type]||'Monitored';
   const statuses={active:'Active',ready:'Ready',oauth_required:'OAuth required',setup_required:'Setup required',syncing:'Syncing',error:'Error'};
   const status=statuses[source.status]||source.status||'Active';
   const state=(source.error_message||source.status==='error')?'high':(source.status==='active'||source.status==='ready')?'live':'';
   const isTwoGis=String(source.source||'').toLowerCase().includes('2gis');
   const description=source.error_message||source.source_url||(isTwoGis?'Add the 2GIS business page URL to test collection.':status==='OAuth required'?'Connect the official account in source settings':'Choose the business page to finish setup');
-  return {id:source.id,dbId:source.id,backendId:source.id,name:source.source,kind,collectionMode:source.collection_mode,method:kind==='Imported'?'Import':labels[source.collection_mode]||'Auto',status,state,description,sourceUrl:source.source_url||'',last:source.last_checked_at?new Date(source.last_checked_at).toLocaleString():'—',next:source.next_check_at?new Date(source.next_check_at).toLocaleString():'—',items:0,errors:source.error_message?1:0};
+  const activeCollector=collectorLabels[String(source.active_collection_method||'').toLowerCase()];
+  const method=kind==='Imported'?'Import':activeCollector?`Collected by ${activeCollector}`:labels[source.collection_mode]||'Auto';
+  return {id:source.id,dbId:source.id,backendId:source.id,name:source.source,kind,collectionMode:source.collection_mode,method,status,state,description,sourceUrl:source.source_url||'',last:source.last_checked_at?new Date(source.last_checked_at).toLocaleString():'—',next:source.next_check_at?new Date(source.next_check_at).toLocaleString():'—',items:0,errors:source.error_message?1:0};
 }
 function uniqueSources(items) {
   const seen=new Set();

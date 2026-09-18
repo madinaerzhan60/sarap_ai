@@ -323,13 +323,17 @@ def _instagram_html_items(html: str, target_url: str, limit: int, collected_by: 
 
 
 class FallbackPipeline:
-    def __init__(self, platform: str, providers: list[CollectorProvider], storage: SupabaseRawReviewStore) -> None:
+    def __init__(self, platform: str, providers: list[CollectorProvider], storage: SupabaseRawReviewStore | None = None) -> None:
         self.platform = platform
         self.providers = providers
         self.storage = storage
         self.log = logging.getLogger(f"sarap.fallback.{platform}")
 
-    async def collect_data(self, target_url: str, limit: int = 10_000) -> dict[str, Any]:
+    async def collect_items(
+        self,
+        target_url: str,
+        limit: int = 10_000,
+    ) -> tuple[list[ScrapedItem], str | None, list[dict[str, str]]]:
         if limit < 1:
             raise ValueError("limit must be positive")
         failures: list[dict[str, str]] = []
@@ -345,23 +349,7 @@ class FallbackPipeline:
                     if not unique:
                         raise EmptyResult(f"{provider.name}: empty result")
                     normalized = list(unique.values())[:limit]
-                    # A database failure is not a provider failure. Let it surface instead
-                    # of paying the next API to fetch the same records again.
-                    try:
-                        saved = await self.storage.save(
-                            normalized,
-                            batch_size=int(os.getenv("COLLECTOR_BATCH_SIZE", "250")),
-                        )
-                    except Exception as exc:
-                        raise StorageWriteError(f"Supabase batch save failed: {exc}") from exc
-                    return {
-                        "platform": self.platform,
-                        "status": "ok",
-                        "collected_by": provider.name,
-                        "collected": len(normalized),
-                        "saved": saved,
-                        "fallbacks": failures,
-                    }
+                    return normalized, provider.name, failures
                 except ProviderNotConfigured as exc:
                     failures.append({"provider": provider.name, "error": str(exc)})
                     break
@@ -382,4 +370,28 @@ class FallbackPipeline:
                         await asyncio.sleep(2**retry_number + random.uniform(0, 0.25))
                     else:
                         failures.append({"provider": provider.name, "error": str(exc)})
-        return {"platform": self.platform, "status": "error", "collected": 0, "saved": 0, "fallbacks": failures}
+        return [], None, failures
+
+    async def collect_data(self, target_url: str, limit: int = 10_000) -> dict[str, Any]:
+        items, provider_name, failures = await self.collect_items(target_url, limit)
+        if not items or not provider_name:
+            return {"platform": self.platform, "status": "error", "collected": 0, "saved": 0, "fallbacks": failures}
+        if self.storage is None:
+            raise StorageWriteError("Supabase storage is required for collect_data()")
+        # A database failure is not a provider failure. Do not pay the next API
+        # to fetch the same records again.
+        try:
+            saved = await self.storage.save(
+                items,
+                batch_size=int(os.getenv("COLLECTOR_BATCH_SIZE", "250")),
+            )
+        except Exception as exc:
+            raise StorageWriteError(f"Supabase batch save failed: {exc}") from exc
+        return {
+            "platform": self.platform,
+            "status": "ok",
+            "collected_by": provider_name,
+            "collected": len(items),
+            "saved": saved,
+            "fallbacks": failures,
+        }
