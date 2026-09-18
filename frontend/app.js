@@ -5,9 +5,14 @@ const storeKey = 'sarap-mvp-state-v1';
 
 async function loadPublicConfig() {
   if (location.protocol === 'file:') return;
+  if (window.SARAP_CONFIG?.SUPABASE_URL && window.SARAP_CONFIG?.SUPABASE_ANON_KEY) return;
   try {
     const response = await fetch('/api/public-config');
-    if (response.ok) window.SARAP_CONFIG = { ...(window.SARAP_CONFIG || {}), ...(await response.json()) };
+    if (response.ok) {
+      const remote = await response.json();
+      const configured = Object.fromEntries(Object.entries(remote).filter(([, value]) => value !== '' && value != null));
+      window.SARAP_CONFIG = { ...(window.SARAP_CONFIG || {}), ...configured };
+    }
   } catch { /* Local standalone demo keeps blank config and uses demo auth. */ }
 }
 
