@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
 import json
 import os
 import re
@@ -408,12 +409,17 @@ async def discover(request: DiscoveryRequest, context: AuthContext = Depends(req
     await require_business_member(context, request.business_id)
     queries = fan_out(request.brand_name, request.aliases, request.city)
     provider = FreeSearchProvider()
-    results = []
-    for query in queries[:3]:
-        results.extend(await provider.search(query, "all", "KZ", "7d"))
+    try:
+        batches = await asyncio.wait_for(
+            asyncio.gather(*(provider.search(query, "all", "KZ", "7d") for query in queries[:3])),
+            timeout=12,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(504, "Internet search timed out. Please try again.") from exc
+    results = [item for batch in batches for item in batch]
     unique = {item.url: item for item in results if item.relevance >= .7}
     if repository.configured and unique:
-        await repository.request("POST", "web_discoveries", json=[{"business_id": str(request.business_id), "url": x.url, "title": x.title, "snippet": x.snippet, "relevance": x.relevance, **({"discovered_at": x.published_at.isoformat()} if x.published_at else {})} for x in unique.values()], prefer="resolution=merge-duplicates")
+        await repository.request("POST", "web_discoveries", params={"on_conflict": "business_id,url"}, json=[{"business_id": str(request.business_id), "url": x.url, "title": x.title, "snippet": x.snippet, "relevance": x.relevance, **({"discovered_at": x.published_at.isoformat()} if x.published_at else {})} for x in unique.values()], prefer="resolution=merge-duplicates")
     return {"queries_generated": len(queries), "results": list(unique.values())}
 
 

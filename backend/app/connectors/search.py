@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from html import unescape
 import os
+import re
+from xml.etree import ElementTree
+import asyncio
 
 import httpx
 
@@ -53,19 +58,56 @@ class GdeltSearchProvider(SearchProvider):
         return results
 
 
+class GoogleNewsRssProvider(SearchProvider):
+    """Keyless Google News RSS search for regional brand mentions."""
+
+    async def search(self, query: str, language: str = "all", country: str = "KZ", date_range: str = "7d") -> list[SearchResult]:
+        endpoint = os.getenv("GOOGLE_NEWS_RSS_BASE", "https://news.google.com/rss/search")
+        params = {"q": f"{query} when:{date_range}", "hl": "ru", "gl": country, "ceid": f"{country}:ru"}
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            response = await client.get(endpoint, params=params)
+            response.raise_for_status()
+        root = ElementTree.fromstring(response.content)
+        results: list[SearchResult] = []
+        for item in root.findall("./channel/item")[:30]:
+            title = (item.findtext("title") or "Untitled article").strip()
+            url = (item.findtext("link") or "").strip()
+            if not url:
+                continue
+            description = unescape(item.findtext("description") or title)
+            snippet = re.sub(r"<[^>]+>", " ", description)
+            snippet = re.sub(r"\s+", " ", snippet).strip()
+            source_node = item.find("source")
+            source = (source_node.text if source_node is not None else None) or "Google News"
+            published_at = None
+            if item.findtext("pubDate"):
+                try:
+                    published_at = parsedate_to_datetime(item.findtext("pubDate"))
+                except (TypeError, ValueError):
+                    pass
+            results.append(SearchResult(title=title, url=url, snippet=snippet, source=source, published_at=published_at, relevance=.82))
+        return results
+
+
 class FreeSearchProvider(SearchProvider):
     """Keyless discovery layer. Add RSS and monitored pages as connectors."""
 
     def __init__(self) -> None:
-        self.providers: list[SearchProvider] = [GdeltSearchProvider()]
+        self.providers: list[SearchProvider] = [GoogleNewsRssProvider(), GdeltSearchProvider()]
 
     async def search(self, query: str, language: str = "all", country: str = "KZ", date_range: str = "7d") -> list[SearchResult]:
-        results: list[SearchResult] = []
-        for provider in self.providers:
+        async def run(provider: SearchProvider) -> list[SearchResult]:
             try:
-                results.extend(await provider.search(query, language, country, date_range))
-            except (httpx.HTTPError, KeyError, ValueError):
-                continue
+                return await asyncio.wait_for(provider.search(query, language, country, date_range), timeout=8)
+            except (asyncio.TimeoutError, httpx.HTTPError, KeyError, ValueError, ElementTree.ParseError):
+                return []
+
+        calls = [run(provider) for provider in self.providers]
+        batches = await asyncio.gather(*calls, return_exceptions=True)
+        results: list[SearchResult] = []
+        for batch in batches:
+            if not isinstance(batch, BaseException):
+                results.extend(batch)
         return list({item.url: item for item in results}.values())
 
 
