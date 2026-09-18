@@ -61,6 +61,7 @@ class Aspect(BaseModel):
 class AIAnalysis(BaseModel):
     language: str
     sentiment: str
+    summary: str = ""
     sentiment_score: float = Field(ge=-1, le=1)
     severity: str
     confidence: float = Field(ge=0, le=1)
@@ -88,6 +89,11 @@ class SourceCreate(BaseModel):
     connection_type: ConnectionType
     collection_mode: CollectionMode = CollectionMode.auto
     source_url: HttpUrl | None = None
+
+
+class SourceUpdate(BaseModel):
+    source_url: HttpUrl | None = None
+    collection_mode: CollectionMode = CollectionMode.auto
 
 
 class DiscoveryRequest(BaseModel):

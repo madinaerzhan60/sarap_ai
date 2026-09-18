@@ -60,6 +60,7 @@ class SupabaseRepository:
             "mention_id": mention_id, "language": result.analysis.language,
             "sentiment": result.analysis.sentiment, "sentiment_score": result.analysis.sentiment_score,
             "severity": result.analysis.severity, "confidence": result.analysis.confidence,
+            "summary": result.analysis.summary,
             "model": provider, "escalated": result.analysis.escalated,
         })
         if result.analysis.aspects:
@@ -81,6 +82,14 @@ class SupabaseRepository:
         rows = await self.request("GET", "mentions", params={"select": "*", "business_id": f"eq.{business_id}", "order": "collected_at.desc", "limit": "500"})
         return [await self._hydrate(row) for row in rows]
 
+    async def get_recommendation(self, business_id: UUID, period_start: str, period_end: str) -> dict[str, Any] | None:
+        rows = await self.request("GET", "business_recommendations", params={"select": "*", "business_id": f"eq.{business_id}", "period_start": f"eq.{period_start}", "period_end": f"eq.{period_end}", "limit": "1"})
+        return rows[0] if rows else None
+
+    async def save_recommendation(self, business_id: UUID, period_start: str, period_end: str, payload: dict[str, Any]) -> dict[str, Any]:
+        rows = await self.request("POST", "business_recommendations", params={"on_conflict": "business_id,period_start,period_end"}, json={"business_id": str(business_id), "period_start": period_start, "period_end": period_end, "score": payload["score"], "summary": payload["summary"], "recommendations": payload["recommendations"]}, prefer="resolution=merge-duplicates,return=representation")
+        return rows[0]
+
     async def _hydrate(self, row: dict[str, Any]) -> ProcessedMention:
         mention_id = row["id"]
         analysis_rows, aspect_rows, risk_rows, alert_rows = await __import__("asyncio").gather(
@@ -89,17 +98,29 @@ class SupabaseRepository:
             self.request("GET", "risk_scores", params={"select": "*", "mention_id": f"eq.{mention_id}", "limit": "1"}),
             self.request("GET", "alerts", params={"select": "id", "mention_id": f"eq.{mention_id}", "limit": "1"}),
         )
-        analysis = analysis_rows[0] if analysis_rows else {"language": row.get("language") or "unknown", "sentiment": "neutral", "sentiment_score": 0, "severity": "low", "confidence": 0, "escalated": False}
+        analysis = analysis_rows[0] if analysis_rows else {"language": row.get("language") or "unknown", "sentiment": "neutral", "summary": "", "sentiment_score": 0, "severity": "low", "confidence": 0, "escalated": False}
         risk = risk_rows[0] if risk_rows else {"score": 0, "level": "low", "reasons": []}
         mention = NormalizedMention(**{k: row.get(k) for k in NormalizedMention.model_fields})
         return ProcessedMention(
             mention=mention,
-            analysis=AIAnalysis(language=analysis["language"], sentiment=analysis["sentiment"], sentiment_score=float(analysis.get("sentiment_score") or 0), severity=analysis["severity"], confidence=float(analysis.get("confidence") or 0), escalated=analysis.get("escalated", False), aspects=[Aspect(aspect=a["aspect"], sentiment=a["sentiment"]) for a in aspect_rows]),
+            analysis=AIAnalysis(language=analysis["language"], sentiment=analysis["sentiment"], summary=analysis.get("summary") or "", sentiment_score=float(analysis.get("sentiment_score") or 0), severity=analysis["severity"], confidence=float(analysis.get("confidence") or 0), escalated=analysis.get("escalated", False), aspects=[Aspect(aspect=a["aspect"], sentiment=a["sentiment"]) for a in aspect_rows]),
             risk=RiskResult(score=risk["score"], level=risk["level"], reasons=risk.get("reasons") or []),
             alert_created=bool(alert_rows),
         )
 
     async def create_source(self, source: SourceCreate) -> dict[str, Any]:
+        existing_params = {
+            "select": "*",
+            "business_id": f"eq.{source.business_id}",
+            "source": f"eq.{source.source}",
+            "connection_type": f"eq.{source.connection_type.value}",
+            "collection_mode": f"eq.{source.collection_mode.value}",
+            "source_url": f"eq.{source.source_url}" if source.source_url else "is.null",
+            "limit": "1",
+        }
+        existing = await self.request("GET", "source_connections", params=existing_params)
+        if existing:
+            return existing[0]
         mode = source.collection_mode.value
         if source.connection_type.value == "imported":
             status = "ready"

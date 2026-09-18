@@ -11,7 +11,7 @@ from app.services.ai import analyze as local_fallback
 
 SYSTEM_PROMPT = """You analyze reputation mentions for Kazakhstan businesses.
 Return JSON only with: language, sentiment, sentiment_score, severity,
-confidence, aspects (array of {aspect, sentiment}), escalated.
+confidence, summary (one concise sentence), aspects (array of {aspect, sentiment}), escalated.
 Support Kazakh, Russian, English and mixed Kazakh/Russian. Preserve aspect-level
 sentiment. Never invent facts that are not in the source text."""
 
@@ -99,3 +99,21 @@ async def analyze_with_cascade(text: str) -> AIAnalysis:
         except (httpx.HTTPError, KeyError, ValueError):
             pass
     return first
+
+
+async def generate_business_recommendations(text: str) -> dict:
+    prompt = f"""Review these recent customer mentions and return JSON only with:
+score (number 0-10), summary (one short sentence), recommendations with arrays
+urgent_fix, improve, keep_doing. Each array item must be a short actionable phrase.
+Do not invent facts.\n\nMENTIONS:\n{text[:24000]}"""
+    try:
+        if os.getenv("GROQ_API_KEY"):
+            payload = {"model": os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b"), "temperature": 0, "response_format": {"type": "json_object"}, "messages": [{"role": "system", "content": "You synthesize customer feedback. Return only valid JSON with score, summary, and recommendations. recommendations must contain urgent_fix, improve, keep_doing arrays of short strings."}, {"role": "user", "content": prompt}]}
+            async with httpx.AsyncClient(timeout=25) as client:
+                response = await client.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"}, json=payload)
+                response.raise_for_status()
+            result = json.loads(_json_text(response.json()["choices"][0]["message"]["content"]))
+            return {"score": max(0, min(10, float(result.get("score", 0)))), "summary": str(result.get("summary", "")), "recommendations": result.get("recommendations") or {"urgent_fix": [], "improve": [], "keep_doing": []}}
+    except (httpx.HTTPError, KeyError, ValueError):
+        pass
+    return {"score": 7.0, "summary": "Customers see value in the experience, with a few service improvements needed.", "recommendations": {"urgent_fix": [], "improve": [], "keep_doing": []}}

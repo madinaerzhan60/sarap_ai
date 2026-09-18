@@ -186,6 +186,23 @@ def _structured_html_fallback(content: str, source_url: str | None, platform_hin
     return deduplicate_reviews(result)
 
 
+def _plain_text_fallback(content: str, platform_hint: ReviewPlatform | None) -> list[ExtractedReview]:
+    platform = platform_hint or ReviewPlatform.forum_blog
+    text = re.sub(r"<[^>]+>", "\n", content)
+    ignored = {"reviews", "review", "reply", "like", "share", "more", "show more", "перевести", "ответить"}
+    result: list[ExtractedReview] = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip(" -•\t")
+        if len(line) < 12 or line.casefold() in ignored:
+            continue
+        rating_match = re.search(r"(?:rating|оценка|рейтинг)?\s*([1-5](?:[.,]0)?)(?:\s*/\s*5|\s*из\s*5)", line, re.I)
+        rating = float(rating_match.group(1).replace(",", ".")) if rating_match else None
+        line = re.sub(r"(?:rating|оценка|рейтинг)?\s*[1-5](?:[.,]0)?\s*(?:/\s*5|из\s*5)", "", line, flags=re.I).strip(" -")
+        sentiment = "positive" if rating and rating >= 4 else "negative" if rating and rating <= 2 else "neutral"
+        result.append(ExtractedReview(source_platform=platform, author_name="Unknown", rating=rating, estimated_sentiment=sentiment, language="mixed" if re.search(r"[әғқңөұүһі]", line, re.I) and re.search(r"[а-я]", line, re.I) else "ru", review_text=line, likes_count=0))
+    return deduplicate_reviews(result[:100])
+
+
 async def extract_reviews(content: str, platform_hint: ReviewPlatform | None = None, source_url: str | None = None) -> list[ExtractedReview]:
     all_reviews: list[ExtractedReview] = []
     parts = _chunks(content)
@@ -205,8 +222,10 @@ async def extract_reviews(content: str, platform_hint: ReviewPlatform | None = N
             except (httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError):
                 provider_failed = True
                 reviews = None
-        if reviews is None:
+        if not reviews:
             reviews = _structured_html_fallback(part, source_url, platform_hint)
+            if not reviews:
+                reviews = _plain_text_fallback(part, platform_hint)
             if not reviews and provider_failed:
                 raise ReviewExtractionUnavailable("The configured AI providers could not extract this content")
             if not reviews and not (os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")):

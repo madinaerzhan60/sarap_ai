@@ -53,6 +53,7 @@ def analyze(text: str) -> AIAnalysis:
     return AIAnalysis(
         language=language,
         sentiment=sentiment,
+        summary=" ".join(text.split())[:160],
         sentiment_score=score,
         severity="critical" if critical else "high" if negative >= 2 else "medium" if negative else "low",
         confidence=confidence,

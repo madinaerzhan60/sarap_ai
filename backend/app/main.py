@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import re
+from collections import Counter
 from datetime import datetime, time, timezone
+from datetime import date, timedelta
 from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, HTTPException
@@ -15,8 +18,8 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from app.connectors.reviews import ConnectorUnavailable, connector_for
 from app.connectors.search import FreeSearchProvider, fan_out
-from app.models import DiscoveryRequest, ExtractedReview, MentionType, ProcessedMention, RawItem, ReviewExtractionRequest, ReviewImportRequest, SourceCreate
-from app.services.llm import analyze_with_cascade
+from app.models import DiscoveryRequest, ExtractedReview, MentionType, ProcessedMention, RawItem, ReviewExtractionRequest, ReviewImportRequest, SourceCreate, SourceUpdate
+from app.services.llm import analyze_with_cascade, generate_business_recommendations
 from app.services.normalization import normalize
 from app.services.review_extraction import ReviewExtractionUnavailable, extract_reviews, review_external_id
 from app.services.risk import calculate
@@ -89,8 +92,46 @@ async def ingest(item: RawItem, business_id: UUID, context: AuthContext = Depend
 async def list_mentions(business_id: UUID, context: AuthContext = Depends(require_user)) -> list[ProcessedMention]:
     await require_business_member(context, business_id)
     if repository.configured:
-        return await repository.list_processed(business_id)
+        try:
+            return await repository.list_processed(business_id)
+        except RepositoryUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
     return [x for x in processed if x.mention.business_id == business_id]
+
+
+def _period_bounds(days: int) -> tuple[date, date]:
+    end = date.today()
+    return end - timedelta(days=max(1, min(days, 365)) - 1), end
+
+
+@app.get("/api/analytics")
+async def analytics(business_id: UUID, days: int = 30, context: AuthContext = Depends(require_user)) -> dict:
+    await require_business_member(context, business_id)
+    mentions = await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id]
+    start, end = _period_bounds(days)
+    rows = [item for item in mentions if item.mention.collected_at.date() >= start]
+    counts = Counter(item.analysis.sentiment for item in rows)
+    stop_words = {"this", "that", "with", "have", "very", "был", "это", "для", "что", "как", "және", "мен", "the", "and"}
+    words = Counter(word.lower() for item in rows for word in re.findall(r"[\wӘәҒғҚқҢңӨөҰұҮүҺһІі]{4,}", item.mention.text) if word.lower() not in stop_words)
+    return {"period_start": start.isoformat(), "period_end": end.isoformat(), "total": len(rows), "positive": counts["positive"], "negative": counts["negative"], "neutral": counts["neutral"] + counts["mixed"], "sentiment": {key: counts[key] for key in ("positive", "negative", "neutral", "mixed")}, "top_keywords": [{"word": word, "count": count} for word, count in words.most_common(10)]}
+
+
+@app.get("/api/recommendations")
+async def recommendations(business_id: UUID, days: int = 30, refresh: bool = False, context: AuthContext = Depends(require_user)) -> dict:
+    await require_business_member(context, business_id)
+    start, end = _period_bounds(days)
+    if repository.configured and not refresh:
+        existing = await repository.get_recommendation(business_id, start.isoformat(), end.isoformat())
+        if existing:
+            return existing
+    mentions = await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id]
+    rows = [item for item in mentions if item.mention.collected_at.date() >= start]
+    source = "\n".join(f"{item.analysis.sentiment}: {item.analysis.summary or item.mention.text[:220]}" for item in rows[-50:])
+    payload = await generate_business_recommendations(source or "No customer mentions are available for this period.")
+    result = {"business_id": str(business_id), "period_start": start.isoformat(), "period_end": end.isoformat(), "score": payload["score"], "summary": payload["summary"], "recommendations": payload["recommendations"], "generated_at": datetime.now(timezone.utc).isoformat()}
+    if repository.configured:
+        return await repository.save_recommendation(business_id, start.isoformat(), end.isoformat(), payload)
+    return result
 
 
 @app.post("/api/reviews/extract", response_model=list[ExtractedReview])
@@ -181,7 +222,40 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
     if repository.configured:
         from datetime import datetime, timezone
         await repository.update_source(source_id, {"last_seen_item_id": source.get("last_seen_item_id"), "active_collection_method": source["active_collection_method"], "last_checked_at": datetime.now(timezone.utc).isoformat(), "status": "active", "error_message": None})
-    return [await process_item(UUID(source["business_id"]), item) for item in items]
+    results = [await process_item(UUID(source["business_id"]), item) for item in items]
+    if not items:
+        source["error_message"] = "No new structured reviews found on the public page"
+        if repository.configured:
+            await repository.update_source(source_id, {"error_message": source["error_message"]})
+    return results
+
+
+@app.patch("/api/sources/{source_id}")
+async def edit_source(source_id: UUID, update: SourceUpdate, context: AuthContext = Depends(require_user)) -> dict:
+    source = await repository.get_source(str(source_id)) if repository.configured else next((item for item in sources if item.get("id") == str(source_id)), None)
+    if not source:
+        raise HTTPException(404, "Source not found")
+    await require_business_member(context, UUID(source["business_id"]))
+    values = {"source_url": str(update.source_url) if update.source_url else None, "collection_mode": update.collection_mode.value, "last_seen_item_id": None, "error_message": None, "active_collection_method": None, "status": "active"}
+    if repository.configured:
+        await repository.update_source(str(source_id), values)
+        updated = await repository.get_source(str(source_id))
+        return updated or source
+    source.update(values)
+    return source
+
+
+@app.delete("/api/sources/{source_id}")
+async def delete_source(source_id: UUID, context: AuthContext = Depends(require_user)) -> dict:
+    source = await repository.get_source(str(source_id)) if repository.configured else next((item for item in sources if item.get("id") == str(source_id)), None)
+    if not source:
+        raise HTTPException(404, "Source not found")
+    await require_business_member(context, UUID(source["business_id"]))
+    if repository.configured:
+        await repository.request("DELETE", "source_connections", params={"id": f"eq.{source_id}"})
+    else:
+        sources.remove(source)
+    return {"deleted": True, "id": str(source_id)}
 
 
 @app.post("/api/discover")

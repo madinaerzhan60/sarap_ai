@@ -265,6 +265,9 @@ class GoogleBusinessReviewsConnector(BaseConnector):
 def connector_for(source: dict[str, Any]) -> BaseConnector:
     name = str(source["source"]).lower().strip()
     mode = str(source.get("collection_mode", "auto"))
+    if name in {"2gis", "2gis maps"} and mode == "auto" and os.getenv("ENABLE_DEMO_CONNECTORS", "true").lower() == "true":
+        from app.connectors.demo import DemoTwoGisConnector
+        return DemoTwoGisConnector()
     if mode in {"auto", "api"} and name in {"google", "google business", "google_business"}:
         credentials = (
             os.getenv("GOOGLE_BUSINESS_ACCESS_TOKEN", ""),

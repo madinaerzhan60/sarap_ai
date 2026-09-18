@@ -6,7 +6,7 @@ from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
 from app.connectors.reviews import extract_reviews_from_html
-from app.services.review_extraction import deduplicate_reviews, review_external_id
+from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 
 
 def test_mixed_language_aspects_and_risk():
@@ -70,3 +70,12 @@ def test_extraction_engine_deduplicates_layout_copies():
 def test_extracted_review_id_is_stable():
     review = ExtractedReview(source_platform="Instagram", author_name="@aida", estimated_sentiment="positive", language="kk", review_text="Қызмет өте жақсы!", likes_count=4)
     assert review_external_id(review) == review_external_id(review.model_copy())
+
+
+def test_plain_text_review_fallback_parses_ratings():
+    reviews = _plain_text_fallback("Aida\nОчень долго ждали заказ — 2/5\nAliya\nКофе отличный и сервис быстрый — 5/5", None)
+    assert len(reviews) == 2
+    assert reviews[0].rating == 2
+    assert reviews[0].estimated_sentiment == "negative"
+    assert reviews[1].rating == 5
+    assert reviews[1].estimated_sentiment == "positive"

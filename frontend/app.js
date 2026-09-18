@@ -29,11 +29,7 @@ const icons = {
 const logo = () => `<span class="brand" aria-label="SARAP"><span class="brand-logo" role="img" aria-label="SARAP"></span></span>`;
 
 const demoMentions = [
-  { id:'m1', source:'2GIS', type:'review', author:'Nurlan B.', time:'2 hours ago', text:'Кофе күшті, бірақ кассир қыз өте дөрекі екен.', sentiment:'mixed', language:'Mixed KZ/RU', risk:61, aspects:[['Product','pos'],['Staff','neg']], rating:3, reviewed:false },
-  { id:'m2', source:'Instagram', type:'social', author:'@dinara.almaty', time:'5 hours ago', text:'Барлығы жақсы, только доставканы долго күттім — бірақ дәмі керемет еді.', sentiment:'mixed', language:'Mixed KZ/RU', risk:48, aspects:[['Food','pos'],['Delivery','neg']], reviewed:false },
   { id:'m3', source:'2GIS', type:'review', author:'Aigerim K.', time:'Yesterday', text:'Заказ ждала 40 минут. Персонал даже не объяснил причину, больше не приду.', sentiment:'negative', language:'Russian', risk:76, aspects:[['Wait time','neg'],['Staff','neg']], rating:1, reviewed:false },
-  { id:'m4', source:'Google', type:'review', author:'Aliya S.', time:'2 days ago', text:'Керемет орын, қызмет көрсету де жақсы. Тағы да келемін!', sentiment:'positive', language:'Kazakh', risk:12, aspects:[['Service','pos'],['Overall','pos']], rating:5, reviewed:true },
-  { id:'m5', source:'Facebook', type:'social', author:'Askar T.', time:'3 days ago', text:'Нормальное место, цены немного высокие для такого сервиса.', sentiment:'negative', language:'Russian', risk:42, aspects:[['Price','neg'],['Service','neg']], reviewed:true },
 ];
 
 const demoDiscoveries = [
@@ -64,6 +60,8 @@ const defaultState = {
   ],
   settings: { telegram:true, email:false, threshold:'High + Critical', tone:'Warm and professional', customAspects:'', retention:'12 months' },
   admin: null,
+  analytics: null,
+  recommendations: null,
 };
 const emptyBusiness = {id:null,name:'',website:'',industry:'',country:'Kazakhstan',city:'',locations:1,aliases:[],handle:''};
 
@@ -73,7 +71,11 @@ let authReady = false;
 let pendingExtractedReviews = [];
 
 function loadState() {
-  try { return { ...structuredClone(defaultState), ...JSON.parse(localStorage.getItem(storeKey) || '{}') }; }
+  try {
+    const saved={ ...structuredClone(defaultState), ...JSON.parse(localStorage.getItem(storeKey) || '{}') };
+    saved.mentions=(saved.mentions||[]).filter(item=>!['m1','m4'].includes(item.id));
+    return saved;
+  }
   catch { return structuredClone(defaultState); }
 }
 function saveState() { localStorage.setItem(storeKey, JSON.stringify(state)); }
@@ -82,7 +84,7 @@ function toast(title, detail='') {
   const el = document.createElement('div'); el.className='toast'; el.innerHTML=`<strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small>`;
   document.querySelector('#toast-region').append(el); setTimeout(()=>el.remove(), 3800);
 }
-function setRoute(route) { state.route=route; if(location.protocol!=='file:')history.replaceState(null,'',route==='admin'?'/admin':'/'); saveState(); render(); window.scrollTo(0,0); if(route==='admin')loadAdminData(); }
+function setRoute(route) { state.route=route; if(location.protocol!=='file:')history.replaceState(null,'',route==='admin'?'/admin':'/'); saveState(); render(); window.scrollTo(0,0); if(route==='admin')loadAdminData(); if(route==='analytics')loadAnalyticsData(); }
 function initials(name='SARAP User') { return name.split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase(); }
 function sourceIcon(source) { const s=source.toLowerCase(); return s.includes('news')||s.includes('village')?icons.news:s.includes('web')||s.includes('reddit')||s.includes('threads')?icons.web:icons.review; }
 
@@ -93,14 +95,13 @@ function landing() {
     <section class="signal-preview glass" aria-label="SARAP product preview"><div class="preview-head"><span class="section-label">From noise to signal</span><span class="preview-badge">Live product preview</span></div><div class="preview-grid"><div class="preview-score-block"><span>Your reputation, in focus</span><strong>72<small>% positive</small></strong><div class="preview-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div><div class="preview-insight"><span class="tag neg">SERVICE · NEEDS ATTENTION</span><h2>Great coffee.<br>Long waiting times.</h2><p>Two opinions in one review. One clear next step.</p></div></div><div class="preview-bottom"><div class="source-row"><span>2GIS</span><span>Yandex</span><span>Google</span><span>Instagram</span><span>Telegram</span></div><button class="form-link" data-action="demo">Open demo dashboard →</button></div></section>
     <section class="features landing-features"><article class="feature glass"><div class="feature-number">01 · MONITOR</div><div class="feature-icon">${icons.radar}</div><h3>Everything in one radar</h3><p>Connect reviews, social conversations, public channels, news and web mentions to one workspace.</p></article><article class="feature glass"><div class="feature-number">02 · UNDERSTAND</div><div class="feature-icon">${icons.analytics}</div><h3>Know exactly what changed</h3><p>AI separates service, staff, product, delivery and price instead of hiding meaning inside one score.</p></article><article class="feature glass"><div class="feature-number">03 · ACT</div><div class="feature-icon">${icons.alerts}</div><h3>Respond before risk grows</h3><p>Critical signals reach the team with evidence, priority and a reply draft in the customer’s language.</p></article></section>
     <section class="language-demo glass"><div><div class="eyebrow">Local language intelligence</div><h2>One review can contain two different truths.</h2><p class="muted">SARAP keeps the aspect-level meaning instead of flattening everything into one sentiment score.</p></div><div class="analysis-output"><p class="quote">“Кофе күшті, бірақ кассир қыз өте дөрекі екен.”</p><div class="analysis-row"><span>Product</span><strong class="good">Positive</strong></div><div class="analysis-row"><span>Staff</span><strong class="warning">Negative</strong></div><div class="analysis-row"><span>Language</span><strong>Mixed KZ/RU</strong></div></div></section>
-    <section class="pricing-section"><div class="section-intro"><div class="eyebrow">Plans that grow with your monitoring</div><h2>Start focused. Add sources when you need them.</h2><p>No complicated setup before you can see the product.</p></div><div class="pricing-grid"><article class="plan glass"><span class="plan-kicker">One-time</span><h3>Audit</h3><div class="plan-price">₸15,000</div><ul><li>Reputation snapshot</li><li>Connected-source report</li><li>Priority issues</li></ul><button class="btn btn-secondary" data-action="register">Get audit</button></article><article class="plan glass featured"><span class="plan-kicker">For growing brands</span><h3>Monitor</h3><div class="plan-price">₸45,000<small>/mo</small></div><ul><li>Continuous monitoring</li><li>Aspect and sentiment analysis</li><li>Alerts and team workflow</li></ul><button class="btn btn-primary" data-action="register">Start monitoring</button></article><article class="plan glass"><span class="plan-kicker">Multi-location</span><h3>Pro</h3><div class="plan-price">Custom</div><ul><li>Multiple brands and locations</li><li>Custom sources and alerts</li><li>Team access and API</li></ul><button class="btn btn-secondary" data-action="register">Create workspace</button></article></div></section>
     <footer class="landing-footer"><span>SARAP · Reputation intelligence for Kazakhstan</span><span>Connect → Monitor → Understand → Alert → Act</span></footer>
   </main>`;
 }
 
 function auth(mode='login') {
   const register = mode==='register';
-  return `<main class="center-shell"><section class="auth-story"><button class="form-link" data-action="landing">← Back to SARAP</button><div style="margin-top:25px">${logo()}</div><h1>${register?'Start monitoring your reputation.':'Welcome back.'}</h1><p>${register?'Create a secure workspace and confirm your email before connecting sources.':'Sign in to your saved workspace and continue where you stopped.'}</p><div class="auth-points"><div class="auth-point"><i></i>Email confirmation and persistent sessions</div><div class="auth-point"><i></i>Separate workspace data for every business</div><div class="auth-point"><i></i>Protected by Supabase Row Level Security</div></div></section><form class="form-card glass" data-form="auth"><h2>${register?'Create account':'Log in'}</h2><p>${register?'We will send a confirmation link to your Gmail or other email address.':'Use the email address you confirmed during registration.'}</p>${register?'<div class="field-grid"><div class="field"><label>Business name</label><input name="business" required autocomplete="organization" placeholder="Coffee Boom"></div><div class="field"><label>Full name</label><input name="name" required autocomplete="name" placeholder="Aigerim S."></div></div>':''}<div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email" placeholder="you@gmail.com"></div><div class="field-grid"><div class="field"><label>Password</label><input name="password" type="password" minlength="8" required autocomplete="${register?'new-password':'current-password'}" placeholder="At least 8 characters"></div>${register?'<div class="field"><label>Repeat password</label><input name="passwordConfirm" type="password" minlength="8" required autocomplete="new-password" placeholder="Repeat password"></div>':''}</div>${!register?'<button type="button" class="form-link auth-helper" data-action="forgot-password">Forgot password?</button>':''}<div class="form-actions"><button type="button" class="form-link" data-action="${register?'login':'register'}">${register?'Already have an account?':'Create an account'}</button><button class="btn btn-primary" type="submit">${register?'Create account':'Log in'} →</button></div><div class="form-note">Your password is handled by Supabase Auth and is never stored in SARAP tables.</div></form></main>`;
+  return `<main class="center-shell"><section class="auth-story"><button class="form-link" data-action="landing">← Back to SARAP</button><div style="margin-top:25px">${logo()}</div><h1>${register?'Start monitoring your reputation.':'Welcome back.'}</h1><p>${register?'Create a secure workspace and confirm your email before connecting sources.':'Sign in to your saved workspace and continue where you stopped.'}</p><div class="auth-points"><div class="auth-point"><i></i>Email confirmation and persistent sessions</div><div class="auth-point"><i></i>Separate workspace data for every business</div><div class="auth-point"><i></i>Protected by Supabase Row Level Security</div></div></section><form class="form-card glass" data-form="auth"><h2>${register?'Create account':'Log in'}</h2><p>${register?'We will send a confirmation link to your Gmail or other email address.':'Use the email address you confirmed during registration.'}</p>${register?'<div class="field-grid"><div class="field"><label>Business name</label><input name="business" required autocomplete="organization" placeholder="Coffee Boom"></div><div class="field"><label>Full name</label><input name="name" required autocomplete="name" placeholder="Aigerim S."></div></div>':''}<div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email" placeholder="you@gmail.com"></div><div class="field"><label>Password</label><input name="password" type="password" minlength="8" required autocomplete="${register?'new-password':'current-password'}" placeholder="At least 8 characters"></div>${register?'<div class="field"><label>Repeat password</label><input name="passwordConfirm" type="password" minlength="8" required autocomplete="new-password" placeholder="Repeat password"></div>':''}${!register?'<button type="button" class="form-link auth-helper" data-action="forgot-password">Forgot password?</button>':''}<div class="form-actions"><button type="button" class="form-link" data-action="${register?'login':'register'}">${register?'Already have an account?':'Create an account'}</button><button class="btn btn-primary" type="submit">${register?'Create account':'Log in'} →</button></div><div class="form-note">Your password is handled by Supabase Auth and is never stored in SARAP tables.</div></form></main>`;
 }
 
 function verifyEmail() {
@@ -148,27 +149,34 @@ function mentionCard(m) {
   return `<article class="mention-card glass" data-mention="${m.id}"><div class="mention-top"><div class="source-icon">${sourceIcon(m.source)}</div><div class="mention-meta"><strong>${escapeHtml(m.source)} · ${escapeHtml(m.author||'Unknown author')}</strong><small>${escapeHtml(m.time)} · ${escapeHtml(m.language||'Unknown language')}</small></div><span class="risk-pill ${m.risk<30?'low':''}">RISK ${m.risk}</span></div><p class="mention-text">${escapeHtml(m.text)}</p><div class="tags">${m.aspects.map(([a,s])=>`<span class="tag ${s}">${escapeHtml(a)} · ${s==='pos'?'Positive':s==='neg'?'Negative':'Neutral'}</span>`).join('')}<span class="tag">${escapeHtml(m.sentiment||'neutral')}</span><span class="tag">${escapeHtml(m.language||'Unknown')}</span></div><div class="mention-actions"><button class="btn btn-quiet" data-action="reply" data-id="${m.id}">Generate reply</button><button class="btn btn-quiet" data-action="review" data-id="${m.id}">${m.reviewed?'Reviewed ✓':'Mark reviewed'}</button><button class="btn btn-quiet" data-action="escalate" data-id="${m.id}">Escalate</button></div></article>`;
 }
 
-function mentions() {
-  const all=[...state.mentions,...state.discoveries];
-  const actions='<button class="btn btn-secondary" data-action="extract-reviews">Paste text / HTML</button><button class="btn btn-primary" data-action="add-mention">+ Add mention</button>';
-  return pageHead('Mentions','Every review, post, article and discussion in one normalized feed.',actions)+(all.length?`<div class="toolbar"><input class="search" id="mention-search" type="search" placeholder="Search text, source or author…"><select class="filter" id="type-filter"><option value="all">All types</option><option value="review">Reviews</option><option value="social">Social</option><option value="news">News</option><option value="forum">Forums</option></select><select class="filter" id="risk-filter"><option value="all">All risks</option><option value="high">High + Critical</option><option value="medium">Medium</option><option value="low">Low</option></select></div><section class="mention-list" id="mention-list">${all.map(mentionCard).join('')}</section><section class="empty glass hidden" id="mentions-empty"><div class="empty-icon">${icons.mentions}</div><h3>No matching mentions</h3><p>Try clearing one of the filters.</p></section>`:emptyState('No mentions collected','Paste copied page content or add one mention manually. SARAP will extract, normalize and analyze it.','extract-reviews','Paste text / HTML'));
+let mentionSentimentFilter='all';
+function exportMentionsCsv(items){
+  const header=['Review','Sentiment','Confidence','Summary'];
+  const csv=[header,...items.map(item=>[item.text,item.sentiment,`${Math.round(item.confidence*100)}%`,item.summary])].map(row=>row.map(value=>`"${String(value||'').replaceAll('"','""')}"`).join(',')).join('\n');
+  const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));link.download='sarap-mentions.csv';link.click();URL.revokeObjectURL(link.href);
+}
+function mentionTableRow(item){const confidence=Math.round(item.confidence*100);return `<tr data-mention-row="${item.id}"><td><strong title="${escapeHtml(item.text)}">${escapeHtml(item.text.slice(0,120))}${item.text.length>120?'…':''}</strong></td><td><span class="tag ${item.sentiment==='positive'?'pos':item.sentiment==='negative'?'neg':''}">${escapeHtml(item.sentiment)}</span></td><td><div class="progress-row"><div><span></span><strong>${confidence}%</strong></div><i><b style="width:${confidence}%"></b></i></div></td><td>${escapeHtml(item.summary||'Summary unavailable')}</td></tr>`;}
+function mentions(){
+  const all=state.mentions.filter(item=>mentionSentimentFilter==='all'||item.sentiment===mentionSentimentFilter);
+  const actions='<button class="btn btn-secondary" data-action="export-csv">Export CSV</button><button class="btn btn-secondary" data-action="extract-reviews">Paste text / HTML</button><button class="btn btn-primary" data-action="add-mention">+ Add mention</button>';
+  const pills=['all','positive','negative','neutral'].map(value=>`<button class="btn btn-quiet ${mentionSentimentFilter===value?'active':''}" data-sentiment-filter="${value}">${value[0].toUpperCase()+value.slice(1)}</button>`).join('');
+  return pageHead('Mentions','Every review, post, article and discussion in one normalized feed.',actions)+(all.length?`<div class="toolbar"><div class="nav-actions">${pills}</div><input class="search" id="mention-search" type="search" placeholder="Search text, source or author…"></div><div class="table-wrap"><table><thead><tr><th>Review</th><th>Sentiment</th><th>Confidence</th><th>Summary</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No mentions collected','Paste copied page content or add one mention manually. SARAP will extract, normalize and analyze it.','extract-reviews','Paste text / HTML'));
 }
 
-function analytics() {
-  if(!state.mentions.length)return pageHead('Analytics','Patterns appear after SARAP collects mentions.')+emptyState('Analytics need data','Connect a source and collect mentions to see sentiment, source and aspect breakdowns.','connect-source','Connect source');
-  const total=state.mentions.length, sourceCounts=Object.entries(state.mentions.reduce((a,m)=>(a[m.source]=(a[m.source]||0)+1,a),{})).sort((a,b)=>b[1]-a[1]);
-  const aspectCounts=Object.entries(state.mentions.flatMap(m=>m.aspects.filter(a=>a[1]==='neg').map(a=>a[0])).reduce((a,x)=>(a[x]=(a[x]||0)+1,a),{})).sort((a,b)=>b[1]-a[1]);
-  const sentiment=['positive','neutral','mixed','negative'].map(name=>[name,state.mentions.filter(m=>m.sentiment===name).length]);
-  return pageHead('Analytics','Live breakdowns calculated from this workspace.','<select class="date-select"><option>All collected data</option></select>')+`<section class="grid content-split"><article class="card glass"><div class="card-head"><div><h2>Sentiment</h2><p>${total} saved mentions</p></div></div>${sentiment.map(([name,count])=>progressRow(name,count,total,name==='negative'?'var(--red)':name==='positive'?'var(--emerald)':'var(--amber)')).join('')}</article><article class="card glass"><div class="card-head"><div><h2>Source contribution</h2><p>Share of collected mentions</p></div></div>${sourceCounts.map(([name,count])=>progressRow(name,count,total,'var(--emerald)')).join('')}</article></section><section class="card glass" style="margin-top:15px"><div class="card-head"><div><h2>Negative aspects</h2><p>What customers complain about most</p></div></div>${aspectCounts.length?`<div class="table-wrap"><table><thead><tr><th>Aspect</th><th>Negative mentions</th><th>Share</th></tr></thead><tbody>${aspectCounts.map(([name,count])=>`<tr><td><strong>${escapeHtml(name)}</strong></td><td>${count}</td><td>${Math.round(count/total*100)}%</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">No negative aspects were detected.</p>'}</section>`;
+function analytics(){
+  const data=state.analytics||{total:state.mentions.length,positive:state.mentions.filter(x=>x.sentiment==='positive').length,negative:state.mentions.filter(x=>x.sentiment==='negative').length,neutral:state.mentions.filter(x=>x.sentiment==='neutral'||x.sentiment==='mixed').length,top_keywords:[]};
+  const total=data.total||0, positivePct=total?Math.round(data.positive/total*100):0, negativePct=total?Math.round(data.negative/total*100):0, score=Number(state.recommendations?.score||0), label=score<5?'Needs attention':score<8?'Good':'Excellent', recommendationGroups=state.recommendations?.recommendations||{};
+  const keywordMax=Math.max(...(data.top_keywords||[]).map(x=>x.count),1);
+  return pageHead('Analytics','Live breakdowns calculated from saved workspace data.','<button class="btn btn-secondary" data-action="refresh-recommendations">Refresh recommendations</button>')+`<section class="grid metric-grid"><article class="metric-card glass"><span class="metric-label">Total reviews</span><div class="metric-value">${total}</div></article><article class="metric-card glass"><span class="metric-label">Positive</span><div class="metric-value good">${data.positive} <small>(${positivePct}%)</small></div></article><article class="metric-card glass"><span class="metric-label">Negative</span><div class="metric-value warning">${data.negative} <small>(${negativePct}%)</small></div></article><article class="metric-card glass"><span class="metric-label">Neutral</span><div class="metric-value">${data.neutral}</div></article></section><section class="grid content-split"><article class="card glass"><div class="card-head"><div><h2>Sentiment distribution</h2><p>${data.period_start||'Current'} to ${data.period_end||'now'}</p></div></div><div style="width:180px;height:180px;margin:20px auto;border-radius:50%;background:conic-gradient(var(--emerald) 0 ${positivePct}%,var(--red) ${positivePct}% ${positivePct+negativePct}%,var(--amber) ${positivePct+negativePct}% 100%);display:grid;place-items:center"><div style="width:110px;height:110px;border-radius:50%;background:var(--paper);display:grid;place-items:center;font-weight:600">${total}</div></div></article><article class="card glass"><div class="card-head"><div><h2>Top Keywords</h2><p>Frequent words in the period</p></div></div>${(data.top_keywords||[]).map(item=>progressRow(item.word,item.count,keywordMax,'var(--emerald)')).join('')||'<p class="muted">No keywords yet.</p>'}</article></section><section class="card glass" style="margin-top:15px"><div class="card-head"><div><h2>AI Business Recommendations</h2><p>Generated from the latest analyzed mentions</p></div><div class="risk-score"><strong>${score.toFixed(1)}/10</strong><small>${label}</small></div></div><p class="summary">${escapeHtml(state.recommendations?.summary||'Refresh recommendations after collecting reviews.')}</p><div class="grid content-split">${[['urgent_fix','Urgent Fix'],['improve','Improve'],['keep_doing','Keep Doing']].map(([key,title])=>`<article class="card"><h3>${title}</h3><ul>${(recommendationGroups[key]||[]).map(item=>`<li>${escapeHtml(item)}</li>`).join('')||'<li class="muted">No items yet.</li>'}</ul></article>`).join('')}</div></section>`;
 }
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
 
 function alerts() {
-  return pageHead('Alerts','High-signal reputation events with status and evidence.','<button class="btn btn-secondary" data-action="configure-alerts">Alert settings</button>')+(state.alerts.length?`<section class="alert-list">${state.alerts.map(a=>`<article class="mention-card glass"><div class="mention-top"><div class="source-icon warning">${icons.alerts}</div><div class="mention-meta"><strong>${a.severity} · ${escapeHtml(a.source)}</strong><small>${escapeHtml(a.time)} · ${escapeHtml(a.aspect)}</small></div><span class="risk-pill">Risk ${a.risk}</span></div><p class="mention-text">“${escapeHtml(a.text)}”</p><div class="mention-actions"><span class="status ${a.status==='New'?'high':a.status==='Resolved'?'live':''}">${a.status}</span><button class="btn btn-quiet" data-action="alert-status" data-id="${a.id}">${a.status==='Resolved'?'Reopen':'Mark resolved'}</button><button class="btn btn-quiet" data-route="mentions">Open mention →</button></div></article>`).join('')}</section>`:emptyState('No alerts','SARAP creates an alert when a saved mention crosses your risk threshold.',null,null));
+  return pageHead('Alerts','High-signal reputation events with status and evidence.','<button class="btn btn-secondary" data-action="configure-alerts">Alert settings</button>')+(state.alerts.length?`<section class="alert-list">${state.alerts.map(a=>`<article class="mention-card glass"><div class="mention-top"><div class="source-icon warning">${icons.alerts}</div><div class="mention-meta"><strong>${a.severity} · ${escapeHtml(a.source)}</strong><small>${escapeHtml(a.time)} · ${escapeHtml(a.aspect)}</small></div><span class="risk-pill">Risk ${a.risk}</span></div><p class="mention-text">“${escapeHtml(a.text)}”</p><div class="mention-actions"><span class="status ${a.status==='New'?'high':a.status==='Resolved'?'live':''}">${a.status}</span><button class="btn btn-quiet" data-action="alert-status" data-id="${a.id}">${a.status==='Resolved'?'Reopen':'Mark resolved'}</button><button class="btn btn-quiet" data-action="delete-alert" data-id="${a.id}">Delete</button><button class="btn btn-quiet" data-route="mentions">Open mention →</button></div></article>`).join('')}</section>`:emptyState('No alerts','SARAP creates an alert when a saved mention crosses your risk threshold.',null,null));
 }
 
 function sources() {
-  return pageHead('Sources','API-first collection with a controlled URL fallback when credentials are unavailable.','<button class="btn btn-primary" data-action="connect-source">+ Connect source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong style="font-size:13px">${escapeHtml(s.name)}</strong><small class="muted" style="display:block;font-size:9px">${escapeHtml(s.kind)} · ${escapeHtml(s.method||'Auto')}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><h3>${s.method?.startsWith('Auto')?'API → URL fallback':s.kind==='Official'?'Official API connection':s.kind==='Monitored'?'Focused URL monitoring':'Historical data import'}</h3><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Last sync</span><strong>${escapeHtml(s.last)}</strong></div><div><span>Next sync</span><strong>${escapeHtml(s.next)}</strong></div><div><span>Items</span><strong>${s.items}</strong></div><div><span>Errors</span><strong>${s.errors}</strong></div></div>${!state.session?.demo&&s.kind!=='Imported'&&(s.dbId||s.sourceUrl)?`<div class="form-actions"><span></span><button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Test collection</button></div>`:''}</article>`).join('')}</section>`:emptyState('No sources connected','Add an official API, a monitored public URL, or an import source.','connect-source','Connect first source'));
+  return pageHead('Sources','API-first collection with a controlled URL fallback when credentials are unavailable.','<button class="btn btn-primary" data-action="connect-source">+ Connect source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong style="font-size:13px">${escapeHtml(s.name)}</strong><small class="muted" style="display:block;font-size:9px">${escapeHtml(s.kind)} · ${escapeHtml(s.method||'Auto')}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><h3>${s.method?.startsWith('Auto')?'API → URL fallback':s.kind==='Official'?'Official API connection':s.kind==='Monitored'?'Focused URL monitoring':'Historical data import'}</h3><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Last sync</span><strong>${escapeHtml(s.last)}</strong></div><div><span>Next sync</span><strong>${escapeHtml(s.next)}</strong></div><div><span>Items</span><strong>${s.items}</strong></div><div><span>Errors</span><strong>${s.errors}</strong></div></div>${s.kind!=='Imported'?`<div class="form-actions"><button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button><button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Test collection</button></div>`:''}</article>`).join('')}</section>`:emptyState('No sources connected','Add an official API, a monitored public URL, or an import source.','connect-source','Connect first source'));
 }
 
 function discover() {
@@ -249,7 +257,7 @@ async function pollBackendSource(source) {
   source.state=body.length?'live':'';
   if(!state.session?.demo)await loadProductData();
   saveState(); render();
-  toast('Collection finished',body.length?`${body.length} review(s) collected and analyzed.`:'The page was reachable, but no new structured reviews were found.');
+  toast(body.length?'Collection finished':'No new reviews',body.length?`${body.length} review(s) collected and analyzed.`:'The source was reachable, but no new structured reviews were found.');
 }
 
 function mapStoredSource(source) {
@@ -261,23 +269,35 @@ function mapStoredSource(source) {
   const description=source.error_message||source.source_url||(status==='OAuth required'?'Connect the official account in source settings':'Choose the business page to finish setup');
   return {id:source.id,dbId:source.id,backendId:source.id,name:source.source,kind,collectionMode:source.collection_mode,method:kind==='Imported'?'Import':labels[source.collection_mode]||'Auto',status,state,description,sourceUrl:source.source_url||'',last:source.last_checked_at?new Date(source.last_checked_at).toLocaleString():'—',next:source.next_check_at?new Date(source.next_check_at).toLocaleString():'—',items:0,errors:source.error_message?1:0};
 }
+function uniqueSources(items) {
+  const seen=new Set();
+  return items.filter(source=>{
+    const key=[source.name,source.collectionMode||source.method,source.sourceUrl||''].join('|').toLowerCase();
+    if(seen.has(key))return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 function applyWorkspace(payload) {
   if(payload?.profile) state.session={...state.session,name:payload.profile.full_name||state.session?.name||'SARAP User',email:payload.profile.email||state.session?.email,role:payload.profile.role||'user',workspaceRole:payload.role||null};
   if(!payload?.business)return false;
   const business=payload.business;
   state.business={...state.business,id:business.id,name:business.name,website:business.website||'',industry:business.industry||'',country:business.country||'Kazakhstan',city:business.city||'',locations:business.location_count||1,aliases:payload.aliases||[]};
-  if(Array.isArray(payload.sources)) state.sources=payload.sources.map(mapStoredSource);
+  if(Array.isArray(payload.sources)) state.sources=uniqueSources(payload.sources.map(mapStoredSource));
   return Boolean(business.onboarding_completed);
 }
 
-function mapProcessed(row){const m=row.mention||{},a=row.analysis||{},r=row.risk||{};return {id:m.id,source:m.source,type:m.source_type==='social_post'||m.source_type==='social_comment'?'social':m.source_type==='news_article'?'news':m.source_type||'review',author:m.author_name||'Unknown author',time:m.published_at?new Date(m.published_at).toLocaleString():new Date(m.collected_at).toLocaleString(),text:m.text||'',rating:m.rating,language:a.language||m.language||'Unknown',sentiment:a.sentiment||'neutral',risk:r.score||0,aspects:(a.aspects||[]).map(x=>[x.aspect,x.sentiment==='positive'?'pos':x.sentiment==='negative'?'neg':'neutral']),reviewed:Boolean(m.reviewed)};}
+function mapProcessed(row){const m=row.mention||{},a=row.analysis||{},r=row.risk||{};return {id:m.id,source:m.source,type:m.source_type==='social_post'||m.source_type==='social_comment'?'social':m.source_type==='news_article'?'news':m.source_type||'review',author:m.author_name||'Unknown author',time:m.published_at?new Date(m.published_at).toLocaleString():new Date(m.collected_at).toLocaleString(),text:m.text||'',summary:a.summary||'',confidence:Number(a.confidence||0),rating:m.rating,language:a.language||m.language||'Unknown',sentiment:a.sentiment||'neutral',risk:r.score||0,aspects:(a.aspects||[]).map(x=>[x.aspect,x.sentiment==='positive'?'pos':x.sentiment==='negative'?'neg':'neutral']),reviewed:Boolean(m.reviewed)};}
 async function loadProductData(){
   if(state.session?.demo||!state.business?.id)return;
   const headers=await apiAuthHeaders();
   const mentionResponse=await fetch(apiPath(`/api/mentions?business_id=${encodeURIComponent(state.business.id)}`),{headers});
-  if(!mentionResponse.ok)throw new Error((await mentionResponse.json()).detail||'Could not load mentions');
-  state.mentions=(await mentionResponse.json()).map(mapProcessed);
+  const mentionText=await mentionResponse.text();
+  let mentionPayload;
+  try{mentionPayload=mentionText?JSON.parse(mentionText):null;}catch{throw new Error(mentionText.slice(0,240)||'Could not load mentions');}
+  if(!mentionResponse.ok)throw new Error(mentionPayload?.detail||'Could not load mentions');
+  state.mentions=(mentionPayload||[]).map(mapProcessed);
   const [alerts,discoveries,settings]=await Promise.all([
     db(`/alerts?business_id=eq.${state.business.id}&select=*&order=created_at.desc`),
     db(`/web_discoveries?business_id=eq.${state.business.id}&select=*&order=discovered_at.desc`),
@@ -287,6 +307,21 @@ async function loadProductData(){
   state.discoveries=(discoveries||[]).map(x=>({id:x.id,source:new URL(x.url).hostname,type:'web',author:'Web discovery',time:new Date(x.discovered_at).toLocaleString(),text:x.snippet||x.title||x.url,sentiment:'neutral',language:'Unknown',risk:0,aspects:[['Relevance','neutral']],reviewed:false,url:x.url}));
   if(settings?.[0])Object.assign(state.settings,{telegram:settings[0].telegram_alerts,email:settings[0].email_alerts,tone:settings[0].reply_tone,customAspects:settings[0].custom_aspects});
   saveState();
+}
+async function loadAnalyticsData(refresh=false){
+  if(state.session?.demo||!state.business?.id)return;
+  try{
+    const headers=await apiAuthHeaders();
+    const [analyticsResponse,recommendationResponse]=await Promise.all([
+      fetch(apiPath(`/api/analytics?business_id=${encodeURIComponent(state.business.id)}&days=30`),{headers}),
+      fetch(apiPath(`/api/recommendations?business_id=${encodeURIComponent(state.business.id)}&days=30${refresh?'&refresh=true':''}`),{headers}),
+    ]);
+    if(!analyticsResponse.ok||!recommendationResponse.ok)throw new Error('Could not load analytics');
+    state.analytics=await analyticsResponse.json();
+    state.recommendations=await recommendationResponse.json();
+    saveState();
+    if(state.route==='analytics')render();
+  }catch(error){toast('Analytics unavailable',error.message);}
 }
 async function loadAdminData(){if(state.session?.role!=='admin')return;try{const response=await fetch(apiPath('/api/admin/overview'),{headers:await apiAuthHeaders()});if(!response.ok)throw new Error((await response.json()).detail||'Could not load admin data');state.admin=await response.json();saveState();render();}catch(error){toast('Admin data unavailable',error.message);}}
 
@@ -330,7 +365,16 @@ async function authSubmit(form) {
       const workspace=await loadWorkspace();const complete=applyWorkspace(workspace);if(complete)await loadProductData();state.route=state.session?.role==='admin'?'admin':complete?'overview':'onboarding';if(state.route==='admin')setTimeout(loadAdminData,0);
     }
     saveState();render();
-  }catch(error){form.classList.remove('loading');toast(state.route==='register'?'Could not create account':'Could not sign in',error.message);}
+  }catch(error){
+    form.classList.remove('loading');
+    const message=String(error.message||'');
+    const detail=/email not confirmed/i.test(message)
+      ? 'Open the confirmation link sent to your email, then try again.'
+      : /invalid login credentials/i.test(message)
+        ? 'Check your email and password, or use Forgot password.'
+        : message;
+    toast(state.route==='register'?'Could not create account':'Could not sign in',detail);
+  }
 }
 async function onboardingSubmit(form) {
   const data=fieldData(form);
@@ -364,8 +408,16 @@ function smartReply(id) {
   modal(`<div class="modal-head"><div><h2>${critical?'Human review':'Smart Reply'}</h2><p>SARAP matched the response language and business tone.</p></div><button class="close" data-action="close-modal">×</button></div><div class="summary">${escapeHtml(reply)}</div><p class="form-note">Not sent automatically — review before use.</p><div class="form-actions"><button class="btn btn-secondary" data-action="regenerate-reply" data-id="${id}">Regenerate</button><button class="btn btn-primary" data-action="copy-reply" data-text="${escapeHtml(reply)}">Copy reply</button></div>`);
 }
 
+function editSourceModal(source){
+  modal(`<div class="modal-head"><div><h2>Edit ${escapeHtml(source.name)}</h2><p>Update the public page URL or reset the collection mode.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source-edit" data-source-id="${escapeHtml(source.id)}"><div class="field"><label>Source page URL</label><input name="url" type="url" required value="${escapeHtml(source.sourceUrl||'')}" placeholder="https://..."></div><div class="field"><label>Collection strategy</label><select name="method"><option value="auto" ${source.collectionMode==='auto'?'selected':''}>Auto — API, then URL</option><option value="scraper" ${source.collectionMode==='scraper'?'selected':''}>Public URL scraper only</option><option value="api" ${source.collectionMode==='api'?'selected':''}>Official API only</option></select></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button><button class="btn btn-primary">Save source</button></div></form>`);
+}
+
 function addSourceModal() {
+  function editSourceModal(source){
+    modal(`<div class="modal-head"><div><h2>Edit ${escapeHtml(source.name)}</h2><p>Update the public page URL or reset the collection mode.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source-edit" data-source-id="${escapeHtml(source.id)}"><div class="field"><label>Source page URL</label><input name="url" type="url" required value="${escapeHtml(source.sourceUrl||'')}" placeholder="https://..."></div><div class="field"><label>Collection strategy</label><select name="method"><option value="auto" ${source.collectionMode==='auto'?'selected':''}>Auto — API, then URL</option><option value="scraper" ${source.collectionMode==='scraper'?'selected':''}>Public URL scraper only</option><option value="api" ${source.collectionMode==='api'?'selected':''}>Official API only</option></select></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button><button class="btn btn-primary">Save source</button></div></form>`);
+  }
   modal(`<div class="modal-head"><div><h2>Connect a source</h2><p>Find the company, choose collection mode and save the connection.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source"><div class="field-grid"><div class="field"><label>Source</label><select name="name"><option>2GIS</option><option>Yandex Maps</option><option>Google Business</option><option>Instagram</option><option>Threads</option><option>Telegram</option><option>YouTube</option><option>Website / RSS</option><option>CSV Import</option></select></div><div class="field"><label>Collection strategy</label><select name="method"><option value="auto">Auto — API, then URL</option><option value="api">Official API only</option><option value="scraper">Public URL scraper only</option><option value="import">Manual import</option></select></div></div><div class="source-search-panel"><div class="field-grid"><div class="field"><label>Business name or handle</label><input name="query" value="${escapeHtml(state.business.name)}" placeholder="Coffee Boom"></div><div class="field"><label>City</label><input name="city" value="${escapeHtml(state.business.city)}" placeholder="Almaty"></div></div><button type="button" class="btn btn-secondary" data-action="search-provider" data-provider="selected">Find on selected source ↗</button></div><div class="field" style="margin-top:14px"><label>Selected business page URL</label><input name="url" type="url" placeholder="Paste the exact business page after search"></div><p class="form-note">Search opens the provider with your business and city already filled in. Select the correct card and copy its page URL here. Official API sources can be saved without a URL and will show OAuth required.</p><div class="form-actions"><span></span><button class="btn btn-primary">Add source</button></div></form>`);
+  return pageHead('Sources','API-first collection with a controlled URL fallback when credentials are unavailable.','<button class="btn btn-primary" data-action="connect-source">+ Connect source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong style="font-size:13px">${escapeHtml(s.name)}</strong><small class="muted" style="display:block;font-size:9px">${escapeHtml(s.kind)} · ${escapeHtml(s.method||'Auto')}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><h3>${s.method?.startsWith('Auto')?'API → URL fallback':s.kind==='Official'?'Official API connection':s.kind==='Monitored'?'Focused URL monitoring':'Historical data import'}</h3><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Last sync</span><strong>${escapeHtml(s.last)}</strong></div><div><span>Next sync</span><strong>${escapeHtml(s.next)}</strong></div><div><span>Items</span><strong>${s.items}</strong></div><div><span>Errors</span><strong>${s.errors}</strong></div></div>${s.kind!=='Imported'?`<div class="form-actions"><button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button><button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Test collection</button></div>`:''}</article>`).join('')}</section>`:emptyState('No sources connected','Add an official API, a monitored public URL, or an import source.','connect-source','Connect first source'));
 }
 
 function providerSearchUrl(provider,query,city){
@@ -409,6 +461,8 @@ document.addEventListener('click', async e => {
   const target=e.target.closest('[data-action]');
   if(['landing','login','register','forgot-password'].includes(action)) setRoute(action);
   if(action==='demo'){state=structuredClone(defaultState);state.session={name:'Demo Founder',email:'demo@sarap.kz',demo:true,verified:true};state.route='overview';saveState();render();}
+  if(action==='export-csv')exportMentionsCsv(state.mentions.filter(item=>mentionSentimentFilter==='all'||item.sentiment===mentionSentimentFilter));
+  if(action==='refresh-recommendations'){target.disabled=true;await loadAnalyticsData(true);target.disabled=false;}
   if(action==='logout'){if(!state.session?.demo)await signOut();state.session=null;state.pendingEmail='';state.route='landing';saveState();render();}
   if(action==='resend-confirmation'){
     if(!state.pendingEmail){setRoute('register');return;}
@@ -422,6 +476,15 @@ document.addEventListener('click', async e => {
   if(action==='copy-reply'){await navigator.clipboard?.writeText(target.dataset.text);toast('Copied','Review the response before sending.');closeModal();}
   if(action==='regenerate-reply'){closeModal();smartReply(target.dataset.id);toast('Reply regenerated','A fresh draft is ready to review.');}
   if(action==='connect-source')addSourceModal();
+  if(action==='edit-source'){const source=state.sources.find(item=>item.id===target.dataset.id);if(source)editSourceModal(source);}
+  if(action==='delete-source'){
+    const source=state.sources.find(item=>item.id===target.dataset.id);if(!source)return;
+    if(!confirm(`Delete ${source.name} source?`))return;
+    try{
+      if(!state.session?.demo){const response=await fetch(apiPath(`/api/sources/${encodeURIComponent(source.id)}`),{method:'DELETE',headers:await apiAuthHeaders()});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Could not delete source');}
+      state.sources=state.sources.filter(item=>item.id!==source.id);saveState();render();toast('Source deleted',`${source.name} was removed.`);
+    }catch(error){toast('Could not delete source',error.message);}
+  }
   if(action==='search-provider'){
     const form=target.closest('form');
     const query=form?.querySelector('[name="query"], [name="sourceQuery"]')?.value.trim();
@@ -465,6 +528,7 @@ document.addEventListener('click', async e => {
 });
 
 document.addEventListener('click', e => { const t=e.target.closest('[data-settings-tab]'); if(t){currentSettingsTab=t.dataset.settingsTab;render();} const sw=e.target.closest('[data-toggle]'); if(sw){state.settings[sw.dataset.toggle]=!state.settings[sw.dataset.toggle];saveState();render();} });
+document.addEventListener('click', e => { const filter=e.target.closest('[data-sentiment-filter]'); if(filter){mentionSentimentFilter=filter.dataset.sentimentFilter;render();} });
 
 document.addEventListener('submit', async e => {
   e.preventDefault(); const form=e.target; const kind=form.dataset.form;
@@ -498,12 +562,22 @@ document.addEventListener('submit', async e => {
         const needsOAuth=d.method==='api';
         const needsSetup=!d.url&&!needsOAuth&&d.method!=='import';
         const description=d.url||(needsOAuth?'Connect the official account in source settings':needsSetup?'Choose the business page to finish setup':'Manual import is ready');
-        state.sources.push({id:crypto.randomUUID(),name:d.name,kind:needsOAuth?'Official':d.method==='import'?'Imported':'Monitored',collectionMode,method:labels[d.method],status:needsOAuth?'OAuth required':needsSetup?'Setup required':'Active',state:needsOAuth||needsSetup?'':'live',description,sourceUrl:d.url||'',last:'—',next:needsOAuth||needsSetup?'—':'15 min',items:0,errors:0});
+        state.sources=uniqueSources([...state.sources,{id:crypto.randomUUID(),name:d.name,kind:needsOAuth?'Official':d.method==='import'?'Imported':'Monitored',collectionMode,method:labels[d.method],status:needsOAuth?'OAuth required':needsSetup?'Setup required':'Active',state:needsOAuth||needsSetup?'':'live',description,sourceUrl:d.url||'',last:'—',next:needsOAuth||needsSetup?'—':'15 min',items:0,errors:0}]);
       }else{
-        const backend=await createBackendSource(d);state.sources.push(mapStoredSource(backend));
+        const backend=await createBackendSource(d);state.sources=uniqueSources([...state.sources,mapStoredSource(backend)]);
       }
     }catch(error){toast('Could not save source',error.message);return;}
     saveState();closeModal();render();toast('Source added',`${d.name} was saved.`);
+  }
+  if(kind==='source-edit'){
+    const data=fieldData(form);const source=state.sources.find(item=>item.id===form.dataset.sourceId);if(!source)return;
+    try{
+      if(state.session?.demo){Object.assign(source,{sourceUrl:data.url,collectionMode:data.method,method:data.method==='scraper'?'URL scraper':data.method==='api'?'API only':'Auto · API preferred',status:'Active',state:'live',description:data.url,last:'—',next:'—',errors:0,backendId:null});closeModal();saveState();render();toast('Source updated','Collection state was reset. Test collection again.');return;}
+      const response=await fetch(apiPath(`/api/sources/${encodeURIComponent(source.id)}`),{method:'PATCH',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({source_url:data.url,collection_mode:data.method})});
+      const body=await response.json();if(!response.ok)throw new Error(body.detail||'Could not update source');
+      Object.assign(source,{sourceUrl:body.source_url||data.url,collectionMode:body.collection_mode||data.method,method:data.method==='scraper'?'URL scraper':data.method==='api'?'API only':'Auto · API preferred',status:'Active',state:'live',description:body.source_url||data.url,last:'—',next:'—',errors:0,backendId:body.id||source.backendId});
+      closeModal();saveState();render();toast('Source updated','Collection state was reset. Test collection again.');
+    }catch(error){toast('Could not update source',error.message);}
   }
   if(kind==='mention'){const d=fieldData(form);const normalized=d.text.trim().replace(/\s+/g,' ');if(state.mentions.some(m=>m.text.toLowerCase()===normalized.toLowerCase())){toast('Duplicate ignored','The normalized content already exists.');return;}if(state.session?.demo){const ai=analyzeDemo(normalized,d.rating);const m={id:crypto.randomUUID(),source:d.source,type:'review',author:'Manual demo entry',time:'Just now',text:normalized,rating:Number(d.rating),reviewed:false,...ai};state.mentions.unshift(m);if(m.risk>=60)state.alerts.unshift({id:crypto.randomUUID(),severity:m.risk>=80?'Critical':'High',source:m.source,time:'Just now',aspect:m.aspects.find(a=>a[1]==='neg')?.[0]||'Overall',risk:m.risk,text:m.text,status:'New'});}else{const response=await fetch(apiPath(`/api/mentions/ingest?business_id=${encodeURIComponent(state.business.id)}`),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({source:d.source,source_type:'review',external_id:`manual-${crypto.randomUUID()}`,author_name:'Manual entry',text:normalized,rating:Number(d.rating),metadata:{origin:'manual'}})});if(!response.ok){toast('Could not analyze mention',(await response.json()).detail||'Request failed');return;}await loadProductData();}saveState();closeModal();render();toast('Mention analyzed','The mention, AI analysis and risk score were saved.');}
   if(kind==='settings'){const d=fieldData(form);if(currentSettingsTab==='Business')Object.assign(state.business,{name:d.name,industry:d.industry,city:d.city,locations:Number(d.locations)});if(currentSettingsTab==='Brand identity')Object.assign(state.business,{website:d.website,handle:d.handle,aliases:d.aliases.split('\n').map(x=>x.trim()).filter(Boolean)});if(currentSettingsTab==='Alerts')state.settings.threshold=d.threshold;if(currentSettingsTab==='AI')Object.assign(state.settings,{tone:d.tone,customAspects:d.customAspects});if(!state.session?.demo){try{if(['Business','Brand identity'].includes(currentSettingsTab))await completeWorkspace(state.business);if(['Alerts','AI'].includes(currentSettingsTab))await db('/workspace_settings?on_conflict=business_id',{method:'POST',prefer:'resolution=merge-duplicates',body:{business_id:state.business.id,alert_threshold:state.settings.threshold==='Critical only'?80:state.settings.threshold==='All negative'?30:60,reply_tone:state.settings.tone,custom_aspects:state.settings.customAspects,email_alerts:state.settings.email,telegram_alerts:state.settings.telegram}});}catch(error){toast('Could not save settings',error.message);return;}}saveState();render();toast('Settings saved',state.session?.demo?'Saved in this browser.':'Saved to your SARAP workspace.');}
@@ -513,7 +587,7 @@ function filterMentions() {
   const q=document.querySelector('#mention-search')?.value.toLowerCase()||''; const type=document.querySelector('#type-filter')?.value||'all'; const risk=document.querySelector('#risk-filter')?.value||'all'; let shown=0;
   document.querySelectorAll('[data-mention]').forEach(card=>{const item=[...state.mentions,...state.discoveries].find(m=>m.id===card.dataset.mention);const text=card.textContent.toLowerCase();const typeOk=type==='all'||item.type===type;const riskOk=risk==='all'||(risk==='high'&&item.risk>=60)||(risk==='medium'&&item.risk>=30&&item.risk<60)||(risk==='low'&&item.risk<30);const match=text.includes(q)&&typeOk&&riskOk;card.classList.toggle('hidden',!match);if(match)shown++;}); document.querySelector('#mentions-empty')?.classList.toggle('hidden',shown>0);
 }
-document.addEventListener('input',e=>{if(['mention-search','type-filter','risk-filter'].includes(e.target.id))filterMentions();});
+document.addEventListener('input',e=>{if(e.target.id==='mention-search'){const query=e.target.value.toLowerCase();document.querySelectorAll('[data-mention-row]').forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(query)));}if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();});
 document.addEventListener('change',e=>{if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();});
 
 await loadPublicConfig();

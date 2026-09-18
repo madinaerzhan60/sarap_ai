@@ -123,6 +123,7 @@ create table public.ai_analysis (
   mention_id uuid not null unique references public.mentions on delete cascade,
   language text not null,
   sentiment text not null,
+  summary text not null default '',
   sentiment_score numeric(5,4),
   severity text not null,
   confidence numeric(5,4),
@@ -210,6 +211,18 @@ create table public.aspect_metrics (
   primary key (business_id, day, aspect)
 );
 
+create table public.business_recommendations (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses on delete cascade,
+  period_start date not null,
+  period_end date not null,
+  score numeric(3,1) not null check (score between 0 and 10),
+  summary text not null default '',
+  recommendations jsonb not null default '{"urgent_fix":[],"improve":[],"keep_doing":[]}'::jsonb,
+  generated_at timestamptz not null default now(),
+  unique (business_id, period_start, period_end)
+);
+
 create table public.telegram_connections (
   id uuid primary key default gen_random_uuid(),
   business_id uuid not null unique references public.businesses on delete cascade,
@@ -223,6 +236,7 @@ create table public.telegram_connections (
 create index mentions_business_published_idx on public.mentions (business_id, published_at desc);
 create index mentions_source_external_idx on public.mentions (source, external_id);
 create index mentions_hash_idx on public.mentions (content_hash);
+create index business_recommendations_lookup_idx on public.business_recommendations (business_id, period_end desc);
 create index ai_analysis_sentiment_idx on public.ai_analysis (sentiment);
 create index risk_scores_score_idx on public.risk_scores (score desc);
 create index source_jobs_ready_idx on public.source_jobs (status, run_after);
