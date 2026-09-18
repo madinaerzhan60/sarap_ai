@@ -376,8 +376,8 @@ async function initializeAuth() {
     if(callback?.type==='recovery'){state.route='reset-password';authReady=true;saveState();return;}
     const workspace=await loadWorkspace();
     const complete=applyWorkspace(workspace);
-    if(complete)await loadProductData();
     state.route=state.session?.role==='admin'&&location.pathname==='/admin'?'admin':complete?'overview':'onboarding';
+    if(complete)setTimeout(()=>loadProductData().then(()=>{if(state.route==='overview')render();}).catch(error=>toast('Dashboard data unavailable',error.message)),0);
     if(state.route==='admin')setTimeout(loadAdminData,0);
     if(state.route==='overview')setTimeout(loadAnalyticsData,0);
   } catch(error) {
