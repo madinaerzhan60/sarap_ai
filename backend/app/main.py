@@ -11,7 +11,7 @@ from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
@@ -448,28 +448,36 @@ if frontend.exists():
     app.mount("/assets", StaticFiles(directory=frontend / "assets"), name="assets")
     app.mount("/static", StaticFiles(directory=frontend), name="static")
 
-    @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(frontend / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})
-
-    @app.get("/config.js")
-    def browser_config() -> Response:
-        """Serve browser-safe config as JavaScript when extensions block /api requests."""
-        config = {
+    def _browser_safe_config() -> dict[str, str]:
+        return {
             "SUPABASE_URL": os.getenv("SUPABASE_URL", ""),
             "SUPABASE_ANON_KEY": os.getenv("SUPABASE_ANON_KEY", ""),
             "AUTH_REDIRECT_URL": os.getenv("FRONTEND_URL") or os.getenv("APP_BASE_URL", ""),
             "API_URL": os.getenv("API_URL", ""),
         }
+
+    def _frontend_index() -> HTMLResponse:
+        html = (frontend / "index.html").read_text(encoding="utf-8")
+        inline_config = f"<script>window.SARAP_CONFIG = {json.dumps(_browser_safe_config())};</script>"
+        html = re.sub(r'<script src="config\.js\?v=\d+"></script>', inline_config, html, count=1)
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    @app.get("/")
+    def index() -> HTMLResponse:
+        return _frontend_index()
+
+    @app.get("/config.js")
+    def browser_config() -> Response:
+        """Serve browser-safe config as JavaScript when extensions block /api requests."""
         return Response(
-            f"window.SARAP_CONFIG = {json.dumps(config)};\n",
+            f"window.SARAP_CONFIG = {json.dumps(_browser_safe_config())};\n",
             media_type="application/javascript",
             headers={"Cache-Control": "no-store"},
         )
 
     @app.get("/{filename:path}")
-    def frontend_file(filename: str) -> FileResponse:
+    def frontend_file(filename: str) -> Response:
         candidate = (frontend / filename).resolve()
         if candidate.is_file() and frontend.resolve() in candidate.parents:
             return FileResponse(candidate, headers={"Cache-Control": "no-cache, must-revalidate"})
-        return FileResponse(frontend / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})
+        return _frontend_index()
