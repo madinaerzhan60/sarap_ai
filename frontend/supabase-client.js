@@ -50,9 +50,15 @@ async function request(url, options = {}) {
   if (!isSupabaseConfigured()) throw new Error('Supabase is not configured yet');
   const headers = { apikey: config().SUPABASE_ANON_KEY, 'Content-Type': 'application/json', ...(options.headers || {}) };
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 7000);
+  let timeout;
+  const deadline = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      reject(new Error('The secure connection timed out. Please try again.'));
+    }, 7000);
+  });
   try {
-    const response = await fetch(url, { ...options, headers, signal: controller.signal });
+    const response = await Promise.race([fetch(url, { ...options, headers, signal: controller.signal }), deadline]);
     const text = await response.text();
     let payload = null;
     try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
