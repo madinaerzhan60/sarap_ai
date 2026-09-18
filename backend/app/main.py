@@ -10,7 +10,7 @@ from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
@@ -79,22 +79,28 @@ async def process_item(business_id: UUID, item: RawItem) -> ProcessedMention:
 
 
 @app.get("/api/health")
-def health() -> dict:
+def health() -> JSONResponse:
     accounts_ready = bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_ANON_KEY"))
-    return {"status": "ok", "service": "sarap-api", "accounts": "connected" if accounts_ready else "setup_required"}
+    return JSONResponse(
+        {"status": "ok", "service": "sarap-api", "accounts": "connected" if accounts_ready else "setup_required"},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/public-config")
-def public_config() -> dict:
+def public_config() -> JSONResponse:
     """Only browser-safe values. Never expose the service-role or provider keys."""
-    return {
-        "SUPABASE_URL": os.getenv("SUPABASE_URL", ""),
-        "SUPABASE_ANON_KEY": os.getenv("SUPABASE_ANON_KEY", ""),
-        "AUTH_REDIRECT_URL": os.getenv("FRONTEND_URL") or os.getenv("APP_BASE_URL", ""),
-        # Empty means same-origin. API_URL is only needed when the frontend and
-        # backend are deployed on different domains.
-        "API_URL": os.getenv("API_URL", ""),
-    }
+    return JSONResponse(
+        {
+            "SUPABASE_URL": os.getenv("SUPABASE_URL", ""),
+            "SUPABASE_ANON_KEY": os.getenv("SUPABASE_ANON_KEY", ""),
+            "AUTH_REDIRECT_URL": os.getenv("FRONTEND_URL") or os.getenv("APP_BASE_URL", ""),
+            # Empty means same-origin. API_URL is only needed when the frontend and
+            # backend are deployed on different domains.
+            "API_URL": os.getenv("API_URL", ""),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/mentions/ingest", response_model=ProcessedMention)
