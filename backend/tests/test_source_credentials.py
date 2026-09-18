@@ -3,8 +3,9 @@ from uuid import uuid4
 
 import pytest
 
-from app.connectors.reviews import GoogleBusinessReviewsConnector, InstagramGraphCommentsConnector, connector_for
-from app.repository import SupabaseRepository
+from app.connectors.reviews import ConnectorUnavailable, GoogleBusinessReviewsConnector, InstagramGraphCommentsConnector, connector_for
+from app.models import SourceCreate
+from app.repository import SourceAlreadyConnected, SupabaseRepository
 from app.services.source_credentials import CredentialEncryptionError, SourceCredentialVault
 
 
@@ -39,6 +40,29 @@ def test_official_connectors_receive_explicit_per_source_credentials(monkeypatch
     assert google.access_token == "workspace-token"
     assert isinstance(instagram, InstagramGraphCommentsConnector)
     assert instagram.access_token == "instagram-token"
+
+
+def test_global_google_token_is_never_used(monkeypatch):
+    monkeypatch.setenv("GOOGLE_BUSINESS_ACCESS_TOKEN", "legacy-global-token")
+    with pytest.raises(ConnectorUnavailable, match="not connected for this workspace"):
+        connector_for({"source": "Google Business", "collection_mode": "api"})
+
+
+def test_private_source_url_returns_clear_error():
+    with pytest.raises(ConnectorUnavailable, match="Private network"):
+        connector_for({"source": "Yandex Maps", "collection_mode": "auto", "source_url": "https://127.0.0.1/reviews"})
+
+
+def test_duplicate_source_returns_specific_error(monkeypatch):
+    repository = SupabaseRepository()
+
+    async def fake_request(method, path, **kwargs):
+        return [{"id": "existing-source"}]
+
+    monkeypatch.setattr(repository, "request", fake_request)
+    source = SourceCreate(business_id=uuid4(), source="Google Business", connection_type="official", collection_mode="api")
+    with pytest.raises(SourceAlreadyConnected, match="already connected"):
+        asyncio.run(repository.create_source(source))
 
 
 def test_repository_credential_lookup_always_filters_business_id(monkeypatch):

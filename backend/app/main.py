@@ -26,7 +26,7 @@ from app.services.risk import calculate
 from app.services.telegram import send_alert
 from app.services.source_credentials import CredentialEncryptionError, SourceCredentialVault
 from app.security import AuthContext, require_admin_context, require_business_member, require_user
-from app.repository import RepositoryUnavailable, repository
+from app.repository import RepositoryUnavailable, SourceAlreadyConnected, repository
 
 app = FastAPI(title="SARAP API", version="0.2.0", description="Reputation intelligence platform for Kazakhstan and the CIS")
 frontend_origins = {"http://localhost:5173", "http://127.0.0.1:5173"}
@@ -209,7 +209,10 @@ async def import_extracted_reviews(request: ReviewImportRequest, context: AuthCo
 async def create_source(source: SourceCreate, context: AuthContext = Depends(require_user)) -> dict:
     await require_business_member(context, source.business_id)
     if repository.configured:
-        return await repository.create_source(source)
+        try:
+            return await repository.create_source(source)
+        except SourceAlreadyConnected as exc:
+            raise HTTPException(409, str(exc)) from exc
     mode = source.collection_mode.value
     if source.connection_type.value == "imported":
         status = "ready"

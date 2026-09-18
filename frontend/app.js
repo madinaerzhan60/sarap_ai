@@ -81,6 +81,7 @@ function loadState() {
 function saveState() { localStorage.setItem(storeKey, JSON.stringify(state)); }
 function escapeHtml(value='') { return String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 function toast(title, detail='') {
+  if(/failed to fetch|networkerror|load failed/i.test(String(detail)))detail='Could not reach SARAP API. Check the server connection and try again.';
   const el = document.createElement('div'); el.className='toast'; el.innerHTML=`<strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small>`;
   document.querySelector('#toast-region').append(el); setTimeout(()=>el.remove(), 3800);
 }
@@ -395,6 +396,8 @@ async function authSubmit(form) {
     const message=String(error.message||'');
     const detail=/email not confirmed/i.test(message)
       ? 'Open the confirmation link sent to your email, then try again.'
+      : /rate limit|too many requests/i.test(message)
+        ? 'Confirmation email limit reached. Wait a few minutes and try again.'
       : /invalid login credentials/i.test(message)
         ? 'Check your email and password, or use Forgot password.'
         : message;
@@ -625,6 +628,7 @@ function filterMentions() {
 document.addEventListener('input',e=>{if(e.target.id==='mention-search'){const query=e.target.value.toLowerCase();document.querySelectorAll('[data-mention-row]').forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(query)));}if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();});
 document.addEventListener('change',e=>{if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();});
 
+app.innerHTML='<main class="center-shell"><section class="form-card glass"><h2>Opening SARAP…</h2><p>Checking your secure session.</p><div class="skeleton"></div></section></main>';
 await loadPublicConfig();
 await initializeAuth();
 render();

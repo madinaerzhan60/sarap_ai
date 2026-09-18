@@ -14,6 +14,10 @@ class RepositoryUnavailable(RuntimeError):
     pass
 
 
+class SourceAlreadyConnected(RuntimeError):
+    pass
+
+
 class SupabaseRepository:
     def __init__(self) -> None:
         self.url = os.getenv("SUPABASE_URL", "").rstrip("/")
@@ -161,7 +165,7 @@ class SupabaseRepository:
         }
         existing = await self.request("GET", "source_connections", params=existing_params)
         if existing:
-            return existing[0]
+            raise SourceAlreadyConnected(f"{source.source} is already connected to this workspace")
         mode = source.collection_mode.value
         if source.connection_type.value == "imported":
             status = "ready"

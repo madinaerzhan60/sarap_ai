@@ -217,8 +217,13 @@ class ReviewPageScraperConnector(BaseConnector):
                     robots.parse(robots_response.text.splitlines())
                     if not robots.can_fetch(user_agent, self.page_url):
                         raise ConnectorUnavailable("The source robots.txt does not allow this page to be collected")
-            response = await _public_get(client, self.page_url)
-            response.raise_for_status()
+            try:
+                response = await _public_get(client, self.page_url)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise ConnectorUnavailable(f"The source website returned HTTP {exc.response.status_code}") from exc
+            except httpx.HTTPError as exc:
+                raise ConnectorUnavailable("The source website is currently unavailable") from exc
         if "text/html" not in response.headers.get("content-type", ""):
             raise ConnectorUnavailable("The source did not return an HTML page")
         if len(response.content) > max_bytes:
@@ -486,8 +491,15 @@ class GoogleBusinessReviewsConnector(BaseConnector):
         endpoint = f"https://mybusiness.googleapis.com/v4/accounts/{self.account_id}/locations/{self.location_id}/reviews"
         headers = {"Authorization": f"Bearer {self.access_token}"}
         async with httpx.AsyncClient(timeout=20, headers=headers) as client:
-            response = await client.get(endpoint, params={"pageSize": 50, "orderBy": "updateTime desc"})
-            response.raise_for_status()
+            try:
+                response = await client.get(endpoint, params={"pageSize": 50, "orderBy": "updateTime desc"})
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in {401, 403}:
+                    raise ConnectorUnavailable("Google Business authorization is invalid or expired; reconnect this source") from exc
+                raise ConnectorUnavailable(f"Google Business API returned HTTP {exc.response.status_code}") from exc
+            except httpx.HTTPError as exc:
+                raise ConnectorUnavailable("Google Business API is currently unavailable") from exc
         items: list[RawItem] = []
         for review in response.json().get("reviews", []):
             review_id = str(review.get("reviewId") or review.get("name") or "")
