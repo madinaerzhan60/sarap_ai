@@ -3,5 +3,6 @@
 window.SARAP_CONFIG = {
   SUPABASE_URL: '',
   SUPABASE_ANON_KEY: '',
+  AUTH_REDIRECT_URL: '',
   API_URL: '',
 };

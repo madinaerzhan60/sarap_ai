@@ -18,6 +18,7 @@ function restUrl(path) {
 }
 
 function redirectUrl() {
+  if (config().AUTH_REDIRECT_URL) return config().AUTH_REDIRECT_URL.replace(/\/$/, '') + '/';
   if (location.protocol !== 'file:') return `${location.origin}${location.pathname}`;
   return config().API_URL || 'http://127.0.0.1:8000/';
 }
@@ -90,15 +91,15 @@ export function consumeAuthCallback() {
     history.replaceState({}, document.title, location.pathname);
     throw new Error(error);
   }
-  const accessToken = hash.get('access_token');
+  const accessToken = hash.get('access_token') || query.get('access_token');
   if (!accessToken) return null;
   const session = normalizeSession({
     access_token: accessToken,
-    refresh_token: hash.get('refresh_token'),
-    expires_in: hash.get('expires_in'),
-    token_type: hash.get('token_type'),
+    refresh_token: hash.get('refresh_token') || query.get('refresh_token'),
+    expires_in: hash.get('expires_in') || query.get('expires_in'),
+    token_type: hash.get('token_type') || query.get('token_type'),
   });
-  const type = hash.get('type');
+  const type = hash.get('type') || query.get('type');
   history.replaceState({}, document.title, location.pathname);
   return { session, type };
 }

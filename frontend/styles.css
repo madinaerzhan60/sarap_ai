@@ -28,8 +28,9 @@ a { color: inherit; }
 .mono { font-family: "IBM Plex Mono", monospace; }
 .eyebrow { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: var(--teal-dark); font: 500 10px/1.4 "IBM Plex Mono", monospace; letter-spacing: .12em; text-transform: uppercase; }
 .eyebrow::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 5px var(--teal-soft); }
-.brand { width: 112px; height: 40px; display: inline-flex; align-items: center; overflow: hidden; flex: none; text-decoration: none; }
-.brand-logo { width: 100%; height: 100%; display: block; border-radius: 8px; background: url("assets/sarap-glass-logo.png?v=3") center/contain no-repeat; filter: drop-shadow(0 5px 12px rgba(0,143,78,.10)); }
+.brand { width: auto; height: 40px; display: inline-flex; align-items: center; flex: none; color: var(--ink); text-decoration: none; }
+.brand-word { font: 600 25px/1 "Unbounded",sans-serif;letter-spacing:-.08em; }
+.brand-word>span { color:var(--teal); }
 .btn { min-height: 43px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 16px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--ink); font-weight: 500; text-decoration: none; transition: transform .18s, background .18s, border-color .18s; }
 .btn:hover { transform: translateY(-1px); }
 .btn-primary { background: linear-gradient(135deg, #173c34, #102b27); color: white; box-shadow: 0 10px 28px -18px rgba(16,43,39,.8); }
@@ -42,8 +43,9 @@ a { color: inherit; }
 
 /* Landing */
 .landing-shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 18px 0 56px; }
+.landing-minimal { min-height:100vh;display:flex;flex-direction:column;padding-bottom:18px; }
 .landing-nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.landing-nav .brand { width: 124px; height: 42px; }
+.landing-nav .brand { height: 42px; }
 .nav-actions { display: flex; gap: 8px; }
 .hero { padding: 76px 0 42px; text-align: center; }
 .hero .eyebrow { justify-content: center; }
@@ -51,6 +53,10 @@ a { color: inherit; }
 .hero h1 span { color: var(--teal); }
 .hero > p { max-width: 670px; margin: 0 auto 28px; color: var(--muted); font-size: 17px; line-height: 1.75; }
 .hero-actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.landing-minimal .hero { flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 0 120px; }
+.landing-minimal .hero h1 { max-width:780px; }
+.landing-minimal .hero>p { margin-bottom:24px; }
+.landing-minimal .hero-actions .btn { min-width:145px; }
 .signal-preview { max-width: 880px; margin: 0 auto 74px; padding: 27px 30px 22px; border-radius: 26px; }
 .preview-head, .preview-bottom { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .preview-head .section-label { margin: 0; }
@@ -84,7 +90,7 @@ a { color: inherit; }
 /* Auth and onboarding */
 .center-shell { min-height: 100vh; width: min(1040px, calc(100% - 40px)); margin: auto; display: grid; grid-template-columns: .9fr 1.1fr; align-items: center; gap: 80px; padding: 40px 0; }
 .auth-story h1 { margin: 22px 0 14px; font: 500 40px/1.18 "Unbounded", sans-serif; letter-spacing: -.045em; }
-.auth-story .brand { width: 126px; height: 44px; margin-left: 0; }
+.auth-story .brand { height: 44px; margin-left: 0; }
 .auth-story p { color: var(--muted); line-height: 1.7; }
 .auth-points { display: grid; gap: 12px; margin-top: 32px; }
 .auth-point { display: flex; align-items: center; gap: 10px; font-size: 13px; }
@@ -220,7 +226,8 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
 
 @media (max-width: 720px) {
   .landing-shell, .center-shell { width: min(100% - 28px, 620px); }
-  .landing-nav .btn-secondary { display: none; }
+  .landing-nav .nav-actions { gap:6px; }
+  .landing-nav .btn { min-height:39px;padding:8px 11px;font-size:12px; }
   .hero { padding: 68px 0 48px; }.hero h1 { font-size: 40px; }.hero > p { font-size: 15px; }
   .signal-preview { padding: 22px; margin-bottom: 48px; }.preview-grid { grid-template-columns: 1fr; gap: 24px; }.preview-insight { padding: 22px 0 0; border-left: 0; border-top: 1px solid var(--line); }.preview-bottom { align-items: flex-start; flex-direction: column; }
   .features { grid-template-columns: 1fr; margin: 45px 0; }.feature { padding: 20px; }.feature .feature-icon { margin-bottom: 20px; }

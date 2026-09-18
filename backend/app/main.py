@@ -76,6 +76,7 @@ def public_config() -> dict:
     return {
         "SUPABASE_URL": os.getenv("SUPABASE_URL", ""),
         "SUPABASE_ANON_KEY": os.getenv("SUPABASE_ANON_KEY", ""),
+        "AUTH_REDIRECT_URL": os.getenv("FRONTEND_URL") or os.getenv("APP_BASE_URL", ""),
         # Empty means same-origin. API_URL is only needed when the frontend and
         # backend are deployed on different domains.
         "API_URL": os.getenv("API_URL", ""),
