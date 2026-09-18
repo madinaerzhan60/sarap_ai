@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import asyncio
+import re
 import socket
 from typing import Any, Iterable
 from urllib.parse import urljoin, urlparse
@@ -228,6 +229,51 @@ class ReviewPageScraperConnector(BaseConnector):
         return items
 
 
+def extract_youtube_video_ids(html: str) -> list[str]:
+    """Return unique public video IDs in the order shown on a channel page."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for video_id in re.findall(r'"videoId":"([A-Za-z0-9_-]{11})"', html):
+        if video_id not in seen:
+            seen.add(video_id)
+            result.append(video_id)
+    return result
+
+
+class YouTubePublicConnector(BaseConnector):
+    """Collect public videos displayed by a channel without requiring an API key."""
+
+    source = "youtube"
+    connection_type = ConnectionType.monitored
+    collection_method = "public_page"
+
+    def __init__(self, page_url: str) -> None:
+        self.page_url = _safe_public_url(page_url)
+
+    async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+        timeout = float(os.getenv("CRAWLER_TIMEOUT_SECONDS", "20"))
+        headers = {"User-Agent": "Mozilla/5.0 SARAP/1.0", "Accept-Language": "ru,en;q=0.8"}
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, headers=headers) as client:
+            response = await _public_get(client, self.page_url)
+            response.raise_for_status()
+            ids = extract_youtube_video_ids(response.text)
+            items: list[RawItem] = []
+            for video_id in ids[:12]:
+                external_id = f"youtube-video-{video_id}"
+                if external_id == last_seen_item_id:
+                    break
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+                metadata_response = await _public_get(client, f"https://www.youtube.com/oembed?url={video_url}&format=json")
+                if metadata_response.status_code != 200:
+                    continue
+                payload = metadata_response.json()
+                title = str(payload.get("title") or "").strip()
+                if not title:
+                    continue
+                items.append(RawItem(source=self.source, source_type=MentionType.social_post, external_id=external_id, external_url=video_url, author_name=str(payload.get("author_name") or "YouTube channel"), text=title, metadata={"collection_method": "public_page", "content_type": "video"}))
+        return items
+
+
 class GoogleBusinessReviewsConnector(BaseConnector):
     """Official Google Business Profile review connector for a verified location."""
 
@@ -265,9 +311,14 @@ class GoogleBusinessReviewsConnector(BaseConnector):
 def connector_for(source: dict[str, Any]) -> BaseConnector:
     name = str(source["source"]).lower().strip()
     mode = str(source.get("collection_mode", "auto"))
-    if name in {"2gis", "2gis maps"} and mode == "auto" and os.getenv("ENABLE_DEMO_CONNECTORS", "true").lower() == "true":
+    if name in {"2gis", "2gis maps"} and mode == "auto" and os.getenv("ENABLE_DEMO_CONNECTORS", "false").lower() == "true":
         from app.connectors.demo import DemoTwoGisConnector
         return DemoTwoGisConnector()
+    if name in {"youtube", "youtube channel"} and mode in {"auto", "scraper"}:
+        page_url = source.get("source_url")
+        if not page_url:
+            raise ConnectorUnavailable("YouTube collection requires a public channel URL")
+        return YouTubePublicConnector(str(page_url))
     if mode in {"auto", "api"} and name in {"google", "google business", "google_business"}:
         credentials = (
             os.getenv("GOOGLE_BUSINESS_ACCESS_TOKEN", ""),

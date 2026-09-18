@@ -5,7 +5,7 @@ from app.services.ai import analyze
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
-from app.connectors.reviews import extract_reviews_from_html
+from app.connectors.reviews import extract_reviews_from_html, extract_youtube_video_ids
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 
 
@@ -79,3 +79,8 @@ def test_plain_text_review_fallback_parses_ratings():
     assert reviews[0].estimated_sentiment == "negative"
     assert reviews[1].rating == 5
     assert reviews[1].estimated_sentiment == "positive"
+
+
+def test_youtube_video_ids_are_deduplicated_in_page_order():
+    html = '"videoId":"3GWEGzQLeWI" other "videoId":"WBzoKTkSCBo" duplicate "videoId":"3GWEGzQLeWI"'
+    assert extract_youtube_video_ids(html) == ["3GWEGzQLeWI", "WBzoKTkSCBo"]

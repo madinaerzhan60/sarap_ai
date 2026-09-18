@@ -122,16 +122,22 @@ async def recommendations(business_id: UUID, days: int = 30, refresh: bool = Fal
     await require_business_member(context, business_id)
     start, end = _period_bounds(days)
     if repository.configured and not refresh:
-        existing = await repository.get_recommendation(business_id, start.isoformat(), end.isoformat())
-        if existing:
-            return existing
+        try:
+            existing = await repository.get_recommendation(business_id, start.isoformat(), end.isoformat())
+            if existing:
+                return existing
+        except RepositoryUnavailable:
+            pass
     mentions = await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id]
     rows = [item for item in mentions if item.mention.collected_at.date() >= start]
     source = "\n".join(f"{item.analysis.sentiment}: {item.analysis.summary or item.mention.text[:220]}" for item in rows[-50:])
     payload = await generate_business_recommendations(source or "No customer mentions are available for this period.")
     result = {"business_id": str(business_id), "period_start": start.isoformat(), "period_end": end.isoformat(), "score": payload["score"], "summary": payload["summary"], "recommendations": payload["recommendations"], "generated_at": datetime.now(timezone.utc).isoformat()}
     if repository.configured:
-        return await repository.save_recommendation(business_id, start.isoformat(), end.isoformat(), payload)
+        try:
+            return await repository.save_recommendation(business_id, start.isoformat(), end.isoformat(), payload)
+        except RepositoryUnavailable:
+            return result
     return result
 
 
@@ -224,10 +230,6 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
         from datetime import datetime, timezone
         await repository.update_source(source_id, {"last_seen_item_id": source.get("last_seen_item_id"), "active_collection_method": source["active_collection_method"], "last_checked_at": datetime.now(timezone.utc).isoformat(), "status": "active", "error_message": None})
     results = [await process_item(UUID(source["business_id"]), item) for item in items]
-    if not items:
-        source["error_message"] = "No new structured reviews found on the public page"
-        if repository.configured:
-            await repository.update_source(source_id, {"error_message": source["error_message"]})
     return results
 
 

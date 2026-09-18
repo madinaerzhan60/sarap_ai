@@ -171,7 +171,7 @@ function mentions(){
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
 
 function sources() {
-  return pageHead('Sources','API-first collection with a controlled URL fallback when credentials are unavailable.','<button class="btn btn-primary" data-action="connect-source">+ Connect source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong style="font-size:13px">${escapeHtml(s.name)}</strong><small class="muted" style="display:block;font-size:9px">${escapeHtml(s.kind)} · ${escapeHtml(s.method||'Auto')}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><h3>${s.method?.startsWith('Auto')?'API → URL fallback':s.kind==='Official'?'Official API connection':s.kind==='Monitored'?'Focused URL monitoring':'Historical data import'}</h3><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Last sync</span><strong>${escapeHtml(s.last)}</strong></div><div><span>Next sync</span><strong>${escapeHtml(s.next)}</strong></div><div><span>Items</span><strong>${s.items}</strong></div><div><span>Errors</span><strong>${s.errors}</strong></div></div>${s.kind!=='Imported'?`<div class="form-actions"><button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button><button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Test collection</button></div>`:''}</article>`).join('')}</section>`:emptyState('No sources connected','Add an official API, a monitored public URL, or an import source.','connect-source','Connect first source'));
+  return pageHead('Sources','Connect pages and check them for new public content.','<button class="btn btn-primary" data-action="connect-source">+ Connect source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong style="font-size:13px">${escapeHtml(s.name)}</strong><small class="muted" style="display:block;font-size:9px">${escapeHtml(s.kind)} · ${escapeHtml(s.method||'Automatic')}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><h3>${s.name.toLowerCase().includes('youtube')?'Public channel videos':s.name.toLowerCase().includes('2gis')?'Review import':s.kind==='Official'?'Connected account':s.kind==='Monitored'?'Public page monitoring':'Historical data import'}</h3><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Last sync</span><strong>${escapeHtml(s.last)}</strong></div><div><span>Next sync</span><strong>${escapeHtml(s.next)}</strong></div><div><span>Items</span><strong>${s.items}</strong></div><div><span>Errors</span><strong>${s.errors}</strong></div></div>${s.kind!=='Imported'?`<div class="form-actions"><button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button>${s.name.toLowerCase().includes('2gis')?'<button class="btn btn-primary" data-action="extract-reviews">Paste reviews</button>':`<button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Test collection</button>`}</div>`:''}</article>`).join('')}</section>`:emptyState('No sources connected','Add a public page, connected account or import source.','connect-source','Connect first source'));
 }
 
 function discover() {
@@ -257,12 +257,13 @@ async function pollBackendSource(source) {
 }
 
 function mapStoredSource(source) {
-  const labels={auto:'Auto · API preferred',api:'API only',scraper:'URL scraper'};
+  const labels={auto:'Automatic',api:'Connected account',scraper:'Public page'};
   const kind={official:'Official',monitored:'Monitored',provider:'Provider',imported:'Imported'}[source.connection_type]||'Monitored';
   const statuses={active:'Active',ready:'Ready',oauth_required:'OAuth required',setup_required:'Setup required',syncing:'Syncing',error:'Error'};
   const status=statuses[source.status]||source.status||'Active';
   const state=(source.error_message||source.status==='error')?'high':(source.status==='active'||source.status==='ready')?'live':'';
-  const description=source.error_message||source.source_url||(status==='OAuth required'?'Connect the official account in source settings':'Choose the business page to finish setup');
+  const isTwoGis=String(source.source||'').toLowerCase().includes('2gis');
+  const description=source.error_message||(isTwoGis?'Copy reviews from the 2GIS page and paste them here for extraction.':source.source_url)||(status==='OAuth required'?'Connect the official account in source settings':'Choose the business page to finish setup');
   return {id:source.id,dbId:source.id,backendId:source.id,name:source.source,kind,collectionMode:source.collection_mode,method:kind==='Imported'?'Import':labels[source.collection_mode]||'Auto',status,state,description,sourceUrl:source.source_url||'',last:source.last_checked_at?new Date(source.last_checked_at).toLocaleString():'—',next:source.next_check_at?new Date(source.next_check_at).toLocaleString():'—',items:0,errors:source.error_message?1:0};
 }
 function uniqueSources(items) {
@@ -294,6 +295,7 @@ async function loadProductData(){
   try{mentionPayload=mentionText?JSON.parse(mentionText):null;}catch{throw new Error(mentionText.slice(0,240)||'Could not load mentions');}
   if(!mentionResponse.ok)throw new Error(mentionPayload?.detail||'Could not load mentions');
   state.mentions=(mentionPayload||[]).map(mapProcessed);
+  state.sources.forEach(source=>{source.items=state.mentions.filter(item=>item.source.toLowerCase()===source.name.toLowerCase()).length;});
   const [alerts,discoveries,settings]=await Promise.all([
     db(`/alerts?business_id=eq.${state.business.id}&select=*&order=created_at.desc`),
     db(`/web_discoveries?business_id=eq.${state.business.id}&select=*&order=discovered_at.desc`),
