@@ -288,7 +288,12 @@ async function pollBackendSource(source) {
   source.last='Just now';
   source.status=body.length?`${body.length} new`:'No new items';
   source.state=body.length?'live':'';
-  if(!state.session?.demo){try{await loadProductData();}catch(error){console.warn('Collection succeeded, but workspace refresh failed:',error);}}
+  if(!state.session?.demo){
+    try{
+      await loadProductData();
+      await loadAnalyticsData(body.length>0);
+    }catch(error){console.warn('Collection succeeded, but workspace refresh failed:',error);}
+  }
   saveState(); render();
   toast(body.length?'Collection finished':'No new reviews',body.length?`${body.length} review(s) collected and analyzed.`:'The source was reachable, but no new structured reviews were found.');
 }
@@ -572,7 +577,7 @@ document.addEventListener('click', async e => {
       if(!response.ok)throw new Error(body.detail||'Import failed');
       const imported=body.filter(x=>!x.duplicate).length;
       const duplicates=body.length-imported;
-      pendingExtractedReviews=[];closeModal();await loadProductData();render();
+      pendingExtractedReviews=[];closeModal();await loadProductData();await loadAnalyticsData(imported>0);render();
       toast('Reviews imported',`${imported} saved${duplicates?`, ${duplicates} duplicate${duplicates===1?'':'s'} skipped`:''}.`);
     }catch(error){target.disabled=false;target.textContent='Import selected';toast('Could not import reviews',error.message);}
   }

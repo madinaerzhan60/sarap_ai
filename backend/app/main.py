@@ -142,6 +142,18 @@ async def analytics(business_id: UUID, days: int = 30, context: AuthContext = De
 async def recommendations(business_id: UUID, days: int = 30, refresh: bool = False, context: AuthContext = Depends(require_user)) -> dict:
     await require_business_member(context, business_id)
     start, end = _period_bounds(days)
+    mentions = _visible_product_mentions(await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id])
+    rows = [item for item in mentions if item.mention.collected_at.date() >= start]
+    if not rows:
+        return {
+            "business_id": str(business_id),
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+            "score": 0,
+            "summary": "Insights will appear after reviews are collected and analyzed.",
+            "recommendations": {"urgent_fix": [], "improve": [], "keep_doing": []},
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
     if repository.configured and not refresh:
         try:
             existing = await repository.get_recommendation(business_id, start.isoformat(), end.isoformat())
@@ -149,10 +161,8 @@ async def recommendations(business_id: UUID, days: int = 30, refresh: bool = Fal
                 return existing
         except RepositoryUnavailable:
             pass
-    mentions = _visible_product_mentions(await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id])
-    rows = [item for item in mentions if item.mention.collected_at.date() >= start]
     source = "\n".join(f"{item.analysis.sentiment}: {item.analysis.summary or item.mention.text[:220]}" for item in rows[-50:])
-    payload = await generate_business_recommendations(source or "No customer mentions are available for this period.")
+    payload = await generate_business_recommendations(source)
     result = {"business_id": str(business_id), "period_start": start.isoformat(), "period_end": end.isoformat(), "score": payload["score"], "summary": payload["summary"], "recommendations": payload["recommendations"], "generated_at": datetime.now(timezone.utc).isoformat()}
     if repository.configured:
         try:
