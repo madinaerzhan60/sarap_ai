@@ -32,3 +32,19 @@ def test_browser_diagnostics_uses_serverless_chromium_on_vercel(monkeypatch, tmp
     assert result["chromium_path_available"] is True
     assert result["chromium_location"] == str(executable)
     assert result["runtime_error"] is None
+
+
+def test_serverless_detection_does_not_require_vercel_system_variables(monkeypatch):
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+    original_is_dir = browser_runtime.Path.is_dir
+
+    def fake_is_dir(path):
+        if str(path) == "/var/task":
+            return True
+        return original_is_dir(path)
+
+    monkeypatch.setattr(browser_runtime.Path, "is_dir", fake_is_dir)
+
+    assert browser_runtime._is_serverless() is True

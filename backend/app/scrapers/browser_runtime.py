@@ -26,6 +26,15 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _is_serverless() -> bool:
+    return bool(
+        os.getenv("VERCEL")
+        or os.getenv("VERCEL_ENV")
+        or os.getenv("AWS_LAMBDA_FUNCTION_NAME")
+        or Path("/var/task").is_dir()
+    )
+
+
 def _serverless_chromium() -> tuple[str, list[str]]:
     """Extract the Lambda-compatible browser and return its recommended flags."""
     helper = _project_root() / "scripts" / "serverless_chromium.cjs"
@@ -67,7 +76,7 @@ def browser_diagnostics() -> dict[str, Any]:
     configured_path = configure_browser_path()
     explicit = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "").strip()
     serverless_error: str | None = None
-    if os.getenv("VERCEL") and not explicit:
+    if _is_serverless() and not explicit:
         try:
             explicit, _ = _serverless_chromium()
         except BrowserRuntimeError as exc:
@@ -88,7 +97,7 @@ def browser_diagnostics() -> dict[str, Any]:
         "chromium_path_available": bool(found and os.access(found, os.X_OK)),
         "chromium_location": str(found) if found else None,
         "browser_store": configured_path,
-        "runtime": "sparticuz" if os.getenv("VERCEL") else "playwright",
+        "runtime": "sparticuz" if _is_serverless() else "playwright",
         "runtime_error": serverless_error,
     }
 
@@ -109,15 +118,15 @@ class BrowserManager:
         explicit = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "").strip()
         mac_chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         serverless_args: list[str] = []
-        if os.getenv("VERCEL") and not explicit:
+        if _is_serverless() and not explicit:
             try:
                 explicit, serverless_args = _serverless_chromium()
             except BrowserRuntimeError:
                 await playwright.stop()
                 raise
-        if not explicit and Path(mac_chrome).is_file() and not os.getenv("VERCEL"):
+        if not explicit and Path(mac_chrome).is_file() and not _is_serverless():
             explicit = mac_chrome
-        args = serverless_args or (["--no-sandbox", "--disable-dev-shm-usage"] if os.getenv("VERCEL") or os.name == "posix" and not Path(mac_chrome).is_file() else [])
+        args = serverless_args or (["--no-sandbox", "--disable-dev-shm-usage"] if _is_serverless() or os.name == "posix" and not Path(mac_chrome).is_file() else [])
         try:
             expected = Path(explicit or playwright.chromium.executable_path)
             if not expected.is_file():
