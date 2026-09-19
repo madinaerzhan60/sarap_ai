@@ -8,7 +8,7 @@ from app.services.polling import next_poll
 from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnector, ModularScraperConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
-from app.scrapers.fallback import ApifyProvider, CollectorProvider, FallbackPipeline, normalize_api_item
+from app.scrapers.fallback import ApifyProvider, CollectorProvider, FallbackPipeline, ProviderNotConfigured, normalize_api_item
 from app.scrapers.models import ScrapedItem
 import asyncio
 import pytest
@@ -256,3 +256,12 @@ def test_fallback_pipeline_uses_next_provider_after_empty_result():
     assert result["status"] == "ok"
     assert result["collected_by"] == "working"
     assert result["saved"] == 1
+
+
+def test_playwright_provider_skips_browser_on_vercel(monkeypatch):
+    from app.scrapers.fallback import PlaywrightProvider
+
+    monkeypatch.setenv("VERCEL", "1")
+    provider = PlaywrightProvider("2gis", lambda: None)
+    with pytest.raises(ProviderNotConfigured, match="unavailable on Vercel"):
+        asyncio.run(provider.collect("https://2gis.kz/almaty/firm/70000001035980354/tab/reviews", 10))

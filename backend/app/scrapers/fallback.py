@@ -127,9 +127,19 @@ class PlaywrightProvider(CollectorProvider):
         self.scraper_factory = scraper_factory
 
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
+        if os.getenv("VERCEL"):
+            raise ProviderNotConfigured("Playwright browser is unavailable on Vercel; continuing with the next provider")
         scraper = self.scraper_factory()
         try:
-            await scraper.connect()
+            try:
+                await scraper.connect()
+            except Exception as exc:
+                message = str(exc)
+                if "Executable doesn't exist" in message or "playwright install" in message:
+                    raise ProviderNotConfigured(
+                        "Chromium is not installed. Run `python -m playwright install chromium` in the scraper worker."
+                    ) from exc
+                raise
             return scraper.clean_data(await scraper.scrape(target_url, limit))
         finally:
             await scraper.close()
