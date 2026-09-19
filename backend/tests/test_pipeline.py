@@ -25,6 +25,36 @@ def test_mixed_language_aspects_and_risk():
     assert risk.score >= 60
 
 
+@pytest.mark.parametrize("text", [
+    "круто",
+    "Лучшее приложение для занятий спортом",
+    "Мне нравится",
+    "Самые выгодные цены",
+    "Супер",
+    "Ұнайды, ыңғайлы",
+    "Спасибо 1Fit, очень довольна. Советую всем!",
+])
+def test_clear_positive_customer_language(text):
+    assert analyze(text).sentiment == "positive"
+
+
+@pytest.mark.parametrize("text", [
+    "Пахнет подстановкой или обманом!",
+    "Не могу зайти, служба поддержки не отвечает",
+    "Не покупайте у них абонемент, никакой поддержки нет",
+    "Если бы была возможность поставить оценку ниже, поставил бы",
+    "Кейбір жерлерде қазақша қызмет етпейді!",
+])
+def test_clear_negative_customer_language(text):
+    assert analyze(text).sentiment == "negative"
+
+
+def test_numeric_rating_has_priority_for_sentiment():
+    assert analyze("Текст без явных слов", 1).sentiment == "negative"
+    assert analyze("Текст без явных слов", 3).sentiment == "neutral"
+    assert analyze("Текст без явных слов", 5).sentiment == "positive"
+
+
 def test_telegram_connection_token_is_signed(monkeypatch):
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "test-secret-that-is-long-enough-for-signing")
     business_id = str(uuid4())

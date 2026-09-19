@@ -66,7 +66,7 @@ async def process_item(business_id: UUID, item: RawItem) -> ProcessedMention:
     elif mention.content_hash in seen_hashes:
         previous = next(x for x in processed if x.mention.content_hash == mention.content_hash)
         return previous.model_copy(update={"duplicate": True})
-    analysis = await analyze_with_cascade(mention.text)
+    analysis = await analyze_with_cascade(mention.text, mention.rating)
     risk = calculate(mention, analysis)
     result = ProcessedMention(mention=mention, analysis=analysis, risk=risk, alert_created=risk.score >= 60)
     if repository.configured:

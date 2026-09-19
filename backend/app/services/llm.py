@@ -13,7 +13,10 @@ SYSTEM_PROMPT = """You analyze reputation mentions for Kazakhstan businesses.
 Return JSON only with: language, sentiment, sentiment_score, severity,
 confidence, summary (one concise sentence), aspects (array of {aspect, sentiment}), escalated.
 Support Kazakh, Russian, English and mixed Kazakh/Russian. Preserve aspect-level
-sentiment. Never invent facts that are not in the source text."""
+sentiment. Sentiment must reflect the customer's meaning, including negation,
+sarcasm and complaints phrased as questions. Words such as scam, deception,
+cannot log in, no support and do not buy are negative. If a numeric rating is
+provided, use 1-2 as negative, 3 as neutral and 4-5 as positive. Never invent facts."""
 
 
 def _json_text(value: str) -> str:
@@ -88,22 +91,31 @@ def _ensure_summary(result: AIAnalysis, text: str) -> AIAnalysis:
     return result.model_copy(update={"summary": " ".join(text.split())[:160]})
 
 
-async def analyze_with_cascade(text: str) -> AIAnalysis:
+async def analyze_with_cascade(text: str, rating: float | None = None) -> AIAnalysis:
     """Groq first, Gemini only when needed; deterministic local fallback without keys."""
+    model_input = f"Rating: {rating}/5\nReview: {text}" if rating is not None else text
     if os.getenv("GROQ_API_KEY"):
         try:
-            first = _ensure_summary(await GroqProvider().analyze(text), text)
+            first = _ensure_summary(await GroqProvider().analyze(model_input), text)
         except (httpx.HTTPError, KeyError, ValueError):
-            first = local_fallback(text)
+            first = local_fallback(text, rating)
     else:
-        first = local_fallback(text)
+        first = local_fallback(text, rating)
 
     if needs_strong_model(first) and os.getenv("GEMINI_API_KEY"):
         try:
-            strong = _ensure_summary(await GeminiProvider().analyze(text), text)
-            return strong.model_copy(update={"escalated": True})
+            strong = _ensure_summary(await GeminiProvider().analyze(model_input), text)
+            first = strong.model_copy(update={"escalated": True})
         except (httpx.HTTPError, KeyError, ValueError):
             pass
+    rule = local_fallback(text, rating)
+    if rating is not None or (rule.sentiment != "neutral" and first.sentiment != rule.sentiment):
+        first = first.model_copy(update={
+            "sentiment": rule.sentiment,
+            "sentiment_score": rule.sentiment_score,
+            "severity": rule.severity,
+            "confidence": max(first.confidence, rule.confidence),
+        })
     return _ensure_summary(first, text)
 
 
