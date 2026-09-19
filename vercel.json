@@ -4,7 +4,7 @@
   "outputDirectory": "public",
   "functions": {
     "api/index.py": {
-      "includeFiles": "{frontend/**,scripts/**,node_modules/**}",
+      "includeFiles": "{frontend/**,node_modules/@sparticuz/chromium/bin/**}",
       "maxDuration": 60
     }
   },

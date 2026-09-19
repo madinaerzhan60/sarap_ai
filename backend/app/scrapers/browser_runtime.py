@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
-import json
-import subprocess
+import tarfile
+import tempfile
 from pathlib import Path
 from typing import Any
 
+import brotli
 from playwright.async_api import Browser, Playwright, async_playwright
 
 log = logging.getLogger("sarap.playwright")
@@ -37,28 +38,72 @@ def _is_serverless() -> bool:
 
 def _serverless_chromium() -> tuple[str, list[str]]:
     """Extract the Lambda-compatible browser and return its recommended flags."""
-    helper = _project_root() / "scripts" / "serverless_chromium.cjs"
+    package_bin = _project_root() / "node_modules" / "@sparticuz" / "chromium" / "bin"
+    executable = Path(tempfile.gettempdir()) / "chromium"
     try:
-        result = subprocess.run(
-            ["node", str(helper)],
-            cwd=_project_root(),
-            capture_output=True,
-            text=True,
-            timeout=25,
-            check=True,
-        )
-        payload = json.loads(result.stdout)
-        executable = str(payload["executablePath"])
-        args = [str(value) for value in payload.get("args", [])]
-        if not Path(executable).is_file():
-            raise FileNotFoundError(executable)
-        return executable, args
+        if not executable.is_file():
+            _inflate_brotli(package_bin / "chromium.br", executable)
+            executable.chmod(0o700)
+        _inflate_tar_brotli(package_bin / "fonts.tar.br", Path(tempfile.gettempdir()) / "fonts")
+        _inflate_tar_brotli(package_bin / "swiftshader.tar.br", Path(tempfile.gettempdir()))
+        lambda_lib = Path(tempfile.gettempdir()) / "al2023" / "lib"
+        _inflate_tar_brotli(package_bin / "al2023.tar.br", lambda_lib.parent)
+        os.environ.setdefault("FONTCONFIG_PATH", str(Path(tempfile.gettempdir()) / "fonts"))
+        os.environ["LD_LIBRARY_PATH"] = ":".join(
+            dict.fromkeys([str(lambda_lib), *os.getenv("LD_LIBRARY_PATH", "").split(":")])
+        ).rstrip(":")
+        return str(executable), _SERVERLESS_CHROMIUM_ARGS
     except Exception as exc:
-        detail = (getattr(exc, "stderr", "") or str(exc)).strip().splitlines()[0]
+        detail = str(exc).strip().splitlines()[0]
         raise BrowserRuntimeError(
             "chromium_not_installed",
             f"Serverless Chromium is unavailable: {detail}",
         ) from exc
+
+
+def _inflate_brotli(source: Path, destination: Path) -> None:
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    decoder = brotli.Decompressor()
+    with source.open("rb") as compressed, destination.open("wb") as output:
+        while chunk := compressed.read(4 * 1024 * 1024):
+            output.write(decoder.process(chunk))
+
+
+def _inflate_tar_brotli(source: Path, destination: Path) -> None:
+    marker = destination / f".{source.stem}.ready"
+    if marker.is_file():
+        return
+    archive = Path(tempfile.gettempdir()) / f"{source.stem}.tar"
+    _inflate_brotli(source, archive)
+    destination.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive) as bundle:
+        bundle.extractall(destination)
+    archive.unlink(missing_ok=True)
+    marker.touch()
+
+
+_SERVERLESS_CHROMIUM_ARGS = [
+    "--ash-no-nudges",
+    "--disable-domain-reliability",
+    "--disable-print-preview",
+    "--disk-cache-size=33554432",
+    "--no-default-browser-check",
+    "--no-pings",
+    "--single-process",
+    "--font-render-hinting=none",
+    "--disable-features=AudioServiceOutOfProcess,IsolateOrigins,site-per-process",
+    "--enable-features=SharedArrayBuffer",
+    "--disable-webgl",
+    "--allow-running-insecure-content",
+    "--disable-setuid-sandbox",
+    "--disable-site-isolation-trials",
+    "--disable-web-security",
+    "--headless=shell",
+    "--no-sandbox",
+    "--no-zygote",
+]
 
 
 def configure_browser_path() -> str | None:
