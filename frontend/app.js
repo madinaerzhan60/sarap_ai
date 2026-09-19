@@ -329,7 +329,13 @@ function sourceUrlProblem(sourceName,url){
       if(!(parsed.hostname.startsWith('2gis.')||parsed.hostname.includes('.2gis.')))return 'Use a link from the 2GIS business card.';
       if(!/\/firm\/\d+(?:\/|$)/.test(parsed.pathname))return 'Open the exact company card and copy a link containing /firm/ followed by its numeric company ID.';
     }
-    if(sourceName==='Instagram'&&!/^\/(?:p|reel)\/[^/]+\/?/.test(parsed.pathname))return 'Instagram comments need a direct post or reel link: /p/... or /reel/...';
+    if(sourceName==='Instagram'){
+      if(!['instagram.com','www.instagram.com'].includes(parsed.hostname.toLowerCase()))return 'Use a link from instagram.com.';
+      const path=parsed.pathname.replace(/^\/+|\/+$/g,'');
+      const isPost=/^(?:p|reel)\/[^/]+$/.test(path);
+      const isProfile=/^[A-Za-z0-9._]+$/.test(path)&&!['about','accounts','developer','direct','directory','emails','explore','legal','oauth','privacy','reels','stories','web'].includes(path.toLowerCase());
+      if(!isPost&&!isProfile)return 'Use an Instagram profile, post or Reel link.';
+    }
   }catch{return 'Paste a valid source URL.';}
   return '';
 }
@@ -483,7 +489,7 @@ function sourcePlaceholder(name){
   if(name==='Telegram')return 'https://t.me/channel';
   return 'https://...';
 }
-function sourceHint(name){return name==='2GIS'?'Open the company card and copy the link with /firm/ID.':'Copy the exact profile, post, channel, video or business page URL.';}
+function sourceHint(name){if(name==='2GIS')return 'Open the company card and copy the link with /firm/ID.';if(name==='Instagram')return 'Profile link scans recent posts. A post or Reel link scans only that publication.';return 'Copy the exact profile, post, channel, video or business page URL.';}
 function apiCredentialFields(name=''){
   return `<details class="api-fields"><summary>Official API access <span class="muted">Google Business / Instagram</span></summary><p class="form-note">Saved encrypted for this workspace only.</p><div class="field"><label>Access token</label><input name="accessToken" type="password" autocomplete="off" placeholder="Paste provider access token"></div><div class="field-grid"><div class="field"><label>Google account ID</label><input name="accountId" placeholder="accounts/..."></div><div class="field"><label>Google location ID</label><input name="locationId" placeholder="locations/..."></div></div><div class="field"><label>Instagram user ID</label><input name="instagramUserId" placeholder="Instagram numeric user ID"></div></details>`;
 }

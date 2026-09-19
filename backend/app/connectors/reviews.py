@@ -313,26 +313,29 @@ class InstagramFallbackConnector(BaseConnector):
     collection_method = "playwright"
 
     def __init__(self, page_url: str) -> None:
+        from app.scrapers.fallback import instagram_profile_handle
+
         self.page_url = _safe_public_url(page_url)
         host = (urlparse(self.page_url).hostname or "").lower()
         if host not in {"instagram.com", "www.instagram.com"}:
-            raise ConnectorUnavailable("Instagram collection requires an instagram.com post or reel URL")
-        if not re.match(r"^/(?:p|reel)/[^/]+/?", urlparse(self.page_url).path):
-            raise ConnectorUnavailable("Instagram comments require a direct /p/... or /reel/... URL, not a profile URL")
+            raise ConnectorUnavailable("Instagram collection requires an instagram.com profile, post or reel URL")
+        self.is_profile = bool(instagram_profile_handle(self.page_url))
+        if not self.is_profile and not re.match(r"^/(?:p|reel)/[^/]+/?", urlparse(self.page_url).path):
+            raise ConnectorUnavailable("Use an Instagram profile, post or reel URL")
 
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         from typing import cast
 
-        from app.scrapers.fallback import ApifyProvider, FallbackPipeline, PlaywrightProvider, SociaVaultProvider, SocialCrawlProvider
+        from app.scrapers.fallback import ApifyProvider, FallbackPipeline, PlaywrightProvider, SociaVaultInstagramProfileProvider, SociaVaultProvider, SocialCrawlProvider
         from app.scrapers.proxy_pool import ProxyPool
         from app.scrapers.social_playwright import InstagramScraper
         from app.scrapers.storage import SupabaseRawReviewStore
 
         proxies = [value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()]
         proxy_pool = ProxyPool(proxies)
-        pipeline = FallbackPipeline(
-            "instagram",
-            [
+        providers = (
+            [SociaVaultInstagramProfileProvider(os.getenv("SOCIAVAULT_API_KEY"))]
+            if self.is_profile else [
                 PlaywrightProvider(
                     "instagram",
                     lambda: InstagramScraper(
@@ -349,8 +352,9 @@ class InstagramFallbackConnector(BaseConnector):
                     os.getenv("APIFY_INSTAGRAM_ACTOR_ID"),
                     os.getenv("APIFY_INSTAGRAM_INPUT_JSON"),
                 ),
-            ],
+            ]
         )
+        pipeline = FallbackPipeline("instagram", providers)
         scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=500)
         if not scraped or not provider:
             detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)

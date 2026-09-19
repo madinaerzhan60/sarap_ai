@@ -166,9 +166,14 @@ def test_instagram_source_uses_fallback_connector():
     assert isinstance(connector, InstagramFallbackConnector)
 
 
-def test_instagram_profile_url_is_rejected_for_comments():
-    with pytest.raises(ConnectorUnavailable, match="direct /p/"):
-        InstagramFallbackConnector("https://www.instagram.com/brand/")
+def test_instagram_profile_url_is_supported():
+    connector = InstagramFallbackConnector("https://www.instagram.com/brand/")
+    assert connector.is_profile is True
+
+
+def test_instagram_system_route_is_rejected():
+    with pytest.raises(ConnectorUnavailable, match="profile, post or reel"):
+        InstagramFallbackConnector("https://www.instagram.com/explore/")
 
 
 def test_yandex_source_uses_modular_playwright_connector():

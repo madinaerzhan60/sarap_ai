@@ -186,6 +186,97 @@ class SociaVaultProvider(CollectorProvider):
         return results
 
 
+def instagram_profile_handle(target_url: str) -> str | None:
+    """Return a public profile handle, excluding Instagram system routes."""
+    from urllib.parse import urlparse
+
+    path_parts = [part for part in urlparse(target_url).path.split("/") if part]
+    if len(path_parts) != 1:
+        return None
+    handle = path_parts[0].lstrip("@").strip()
+    reserved = {
+        "about", "accounts", "developer", "direct", "directory", "emails",
+        "explore", "legal", "oauth", "privacy", "reels", "stories", "web",
+    }
+    if not handle or handle.casefold() in reserved or not re.fullmatch(r"[A-Za-z0-9._]+", handle):
+        return None
+    return handle
+
+
+def instagram_post_urls(payload: Any) -> list[str]:
+    """Extract canonical post/reel URLs from the profile-posts response."""
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    rows = _list(data.get("posts") if isinstance(data, dict) else None)
+    urls: list[str] = []
+    for row in rows:
+        direct_url = _first(row, "url", "permalink", "post_url", "postUrl")
+        shortcode = _first(row, "shortcode", "code", "node.shortcode")
+        product_type = str(_first(row, "product_type", "productType", "media_type", default="")).casefold()
+        if isinstance(direct_url, str) and re.match(r"^https://(?:www\.)?instagram\.com/(?:p|reel)/[^/]+", direct_url):
+            url = direct_url
+        elif shortcode:
+            route = "reel" if "reel" in product_type else "p"
+            url = f"https://www.instagram.com/{route}/{shortcode}/"
+        else:
+            continue
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+class SociaVaultInstagramProfileProvider(CollectorProvider):
+    """Resolve a public profile to recent posts, then collect their comments."""
+
+    name = "sociavault"
+    platform = "instagram"
+    posts_endpoint = "https://api.sociavault.com/v1/scrape/instagram/posts"
+
+    def __init__(self, api_key: str | None) -> None:
+        self.api_key = (api_key or "").strip()
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key)
+
+    async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
+        if not self.configured:
+            raise ProviderNotConfigured(
+                "Instagram profile scanning needs SOCIAVAULT_API_KEY or an official Instagram account connection"
+            )
+        handle = instagram_profile_handle(target_url)
+        if not handle:
+            raise ProviderError("sociavault: invalid Instagram profile URL")
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(
+                self.posts_endpoint,
+                headers={"X-API-Key": self.api_key},
+                params={"handle": handle},
+            )
+            _raise_for_provider_status(response, self.name)
+            post_urls = instagram_post_urls(response.json())
+        if not post_urls:
+            return []
+
+        maximum_posts = max(1, int(os.getenv("INSTAGRAM_PROFILE_POST_LIMIT", "5")))
+        comments_provider = SociaVaultProvider(self.api_key)
+        results: list[ScrapedItem] = []
+        failures: list[str] = []
+        for post_url in post_urls[:maximum_posts]:
+            try:
+                comments = await comments_provider.collect(post_url, limit - len(results))
+                for item in comments:
+                    item.metadata["profile_handle"] = handle
+                    item.metadata["post_url"] = post_url
+                results.extend(comments)
+            except ProviderError as exc:
+                failures.append(str(exc))
+            if len(results) >= limit:
+                break
+        if not results and failures:
+            raise ProviderError(f"sociavault: profile posts found, but comments could not be collected ({failures[0]})")
+        return results[:limit]
+
+
 class SocialCrawlProvider(CollectorProvider):
     name = "socialcrawl"
     platform = "instagram"
