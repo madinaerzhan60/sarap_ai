@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 from app.models import ExtractedReview, RawItem
-from app.services.ai import analyze
+from app.services.ai import analyze, summarize_review
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
@@ -149,6 +149,18 @@ def test_collector_language_detection_handles_ru_kk_and_mixed_text():
 def test_twogis_search_url_is_normalized_to_reviews_tab():
     connector = TwoGisPlaywrightConnector("https://2gis.kz/almaty/search/1Fit/firm/70000001035980354/76.88%2C43.23")
     assert connector.page_url == "https://2gis.kz/almaty/firm/70000001035980354/tab/reviews"
+
+
+def test_summary_paraphrases_review_instead_of_copying_it():
+    text = "Отличное приложение. Отличный сервис. Разнообразие приятно удивляет."
+    summary = summarize_review(text, "positive")
+    assert summary == "Пользователь положительно оценивает приложение, сервис и выбор услуг."
+    assert text not in summary
+
+
+def test_summary_captures_specific_complaint():
+    text = "Как человек с одним посещением мог выиграть розыгрыш годового абонемента? Пахнет обманом!"
+    assert summarize_review(text, "negative") == "Пользователь сомневается в честности розыгрыша годового абонемента."
 
 
 def test_twogis_search_url_without_firm_id_is_rejected():

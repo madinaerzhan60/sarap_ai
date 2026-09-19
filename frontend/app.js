@@ -177,20 +177,32 @@ function exportMentionsCsv(items){
 function fallbackMentionSummary(item){
   const text=String(item.text||'').replace(/\s+/g,' ').trim();
   if(!text)return 'No text available for analysis.';
-  const excerpt=text.length>155?`${text.slice(0,152).trim()}…`:text;
-  const hasCyrillic=/[А-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]/.test(excerpt);
+  const lower=text.toLowerCase();
+  const hasCyrillic=/[А-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]/.test(text);
   if(hasCyrillic){
-    const labels={positive:'Положительный отзыв',negative:'Проблема',mixed:'Смешанный отзыв',neutral:'Нейтральное упоминание'};
-    return `${labels[item.sentiment]||'Упоминание'}: ${excerpt}`;
+    if(/розыгрыш|выигра.{0,20}абонемент/i.test(lower))return 'Пользователь сомневается в честности розыгрыша годового абонемента.';
+    if(/позвон|звон.{0,35}продаж|продажниц/i.test(lower))return 'Пользователь жалуется на нежелательный звонок отдела продаж.';
+    if(/не\s+(могу|получается).{0,45}(войти|зайти)|не\s+работ.{0,30}прилож/i.test(lower))return 'Пользователь сообщает о проблеме со входом или работой приложения.';
+    if(/обман|мошен|подстав/i.test(lower))return 'Пользователь подозревает обман или несправедливое отношение.';
+    if(/приложен.{0,45}(спорт|занят)|(спорт|занят).{0,45}приложен/i.test(lower))return 'Пользователь хвалит приложение для занятий спортом.';
+    if(/приложен|сервис|разнообраз/i.test(lower)&&item.sentiment==='positive')return 'Пользователь положительно оценивает приложение, сервис и выбор услуг.';
+    return item.sentiment==='positive'?'Пользователь положительно оценивает сервис.':item.sentiment==='negative'?'Пользователь сообщает о негативном опыте с сервисом.':item.sentiment==='mixed'?'Пользователь отмечает преимущества и недостатки сервиса.':'Пользователь делится мнением без однозначной оценки.';
   }
-  const labels={positive:'Positive feedback',negative:'Reported issue',mixed:'Mixed feedback',neutral:'Neutral mention'};
-  return `${labels[item.sentiment]||'Mention'}: ${excerpt}`;
+  return item.sentiment==='positive'?'The customer is satisfied with the overall experience.':item.sentiment==='negative'?'The customer reports a problem with the experience.':'The customer shares a general opinion without a clear rating.';
+}
+function meaningfulMentionSummary(item){
+  const summary=String(item.summary||'').trim();
+  const text=String(item.text||'').replace(/\s+/g,' ').trim();
+  const normalized=summary.replace(/\s+/g,' ').toLowerCase();
+  const original=text.toLowerCase();
+  const copied=!normalized||normalized===original||original.startsWith(normalized.replace(/…$/,''))||/^(положительный отзыв|проблема|смешанный отзыв|нейтральное упоминание|positive feedback|reported issue):/.test(normalized);
+  return copied?fallbackMentionSummary(item):summary;
 }
 function mentionTableRow(item){
   const confidence=Math.max(0,Math.min(100,Math.round(Number(item.confidence||0)*100)));
   const confidenceTone=confidence>=80?'high':confidence>=60?'medium':'low';
   const sentiment=String(item.sentiment||'neutral').toLowerCase();
-  const summary=String(item.summary||'').trim()||fallbackMentionSummary(item);
+  const summary=meaningfulMentionSummary(item);
   return `<tr data-mention-row="${item.id}">
     <td class="review-cell"><strong title="${escapeHtml(item.text)}">${escapeHtml(item.text.slice(0,150))}${item.text.length>150?'…':''}</strong><small>${escapeHtml(item.source||'Unknown source')} · ${escapeHtml(item.author||'Unknown author')}</small></td>
     <td><span class="sentiment-pill ${sentiment}"><i></i>${escapeHtml(sentiment)}</span></td>

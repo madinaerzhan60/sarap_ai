@@ -7,14 +7,17 @@ from abc import ABC, abstractmethod
 import httpx
 
 from app.models import AIAnalysis
-from app.services.ai import analyze as local_fallback
+from app.services.ai import analyze as local_fallback, summarize_review
 
 SYSTEM_PROMPT = """You analyze reputation mentions for Kazakhstan businesses.
 Return JSON only with: language, sentiment, sentiment_score, severity,
-confidence, summary (one concise sentence), aspects (array of {aspect, sentiment}), escalated.
+confidence, summary (one concise sentence describing the core topic and customer meaning),
+aspects (array of {aspect, sentiment}), escalated.
 Support Kazakh, Russian, English and mixed Kazakh/Russian. Preserve aspect-level
 sentiment. Sentiment must reflect the customer's meaning, including negation,
-sarcasm and complaints phrased as questions. Words such as scam, deception,
+sarcasm and complaints phrased as questions. The summary must paraphrase the
+meaning; never copy the review, truncate it, or prefix it with labels such as
+"Positive review" or "Problem". Words such as scam, deception,
 cannot log in, no support and do not buy are negative. If a numeric rating is
 provided, use 1-2 as negative, 3 as neutral and 4-5 as positive. Never invent facts."""
 
@@ -86,9 +89,17 @@ def needs_strong_model(result: AIAnalysis) -> bool:
 
 
 def _ensure_summary(result: AIAnalysis, text: str) -> AIAnalysis:
-    if result.summary.strip():
+    summary = result.summary.strip()
+    normalized_text = " ".join(text.split()).casefold()
+    normalized_summary = " ".join(summary.split()).casefold()
+    copied = bool(normalized_summary) and (
+        normalized_summary == normalized_text
+        or normalized_text.startswith(normalized_summary.rstrip("…"))
+        or normalized_summary.startswith(("положительный отзыв:", "проблема:", "positive feedback:", "reported issue:"))
+    )
+    if summary and not copied:
         return result
-    return result.model_copy(update={"summary": " ".join(text.split())[:160]})
+    return result.model_copy(update={"summary": summarize_review(text, result.sentiment)})
 
 
 async def analyze_with_cascade(text: str, rating: float | None = None) -> AIAnalysis:

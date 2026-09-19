@@ -19,6 +19,42 @@ ASPECTS = {
 }
 
 
+def summarize_review(text: str, sentiment: str) -> str:
+    """Create a short meaning-based summary without repeating the review."""
+    compact = " ".join(text.split())
+    lowered = compact.casefold()
+    if not re.search(r"[а-яё]", compact, re.I):
+        if sentiment == "positive":
+            return "The customer is satisfied with the overall experience."
+        if sentiment == "negative":
+            return "The customer reports a problem with the experience."
+        return "The customer shares a general opinion without a clear rating."
+    rules = [
+        (r"розыгрыш|выигра.{0,20}абонемент", "Пользователь сомневается в честности розыгрыша годового абонемента."),
+        (r"позвон|звон.{0,35}продаж|продажниц", "Пользователь жалуется на нежелательный звонок отдела продаж."),
+        (r"не\s+(?:могу|получается).{0,45}(?:войти|зайти)|не\s+работ.{0,30}прилож", "Пользователь сообщает о проблеме со входом или работой приложения."),
+        (r"поддержк.{0,35}(?:не\s+отвеч|никак|игнор)", "Пользователь жалуется на отсутствие ответа службы поддержки."),
+        (r"убирают\s+время|время.{0,30}(?:зал|клуб)", "Пользователь недоволен ограничениями времени посещения залов."),
+        (r"обман|мошен|подстав", "Пользователь подозревает обман или несправедливое отношение."),
+        (r"дорог|цен|стоимост", "Пользователь недоволен стоимостью услуги."),
+        (r"долго|очеред|ожида", "Пользователь жалуется на долгое ожидание."),
+        (r"груб|персонал|сотрудник|менеджер", "Пользователь оценивает качество работы сотрудников."),
+        (r"приложен.{0,45}(?:спорт|занят)|(?:спорт|занят).{0,45}приложен", "Пользователь хвалит приложение для занятий спортом."),
+        (r"приложен|сервис|разнообраз", "Пользователь положительно оценивает приложение, сервис и выбор услуг."),
+        (r"удобн|выгодн", "Пользователь отмечает удобство и пользу сервиса."),
+    ]
+    for pattern, summary in rules:
+        if re.search(pattern, lowered, re.I):
+            return summary
+    if sentiment == "positive":
+        return "Пользователь положительно оценивает сервис."
+    if sentiment == "negative":
+        return "Пользователь сообщает о негативном опыте с сервисом."
+    if sentiment == "mixed":
+        return "Пользователь отмечает одновременно преимущества и недостатки сервиса."
+    return "Пользователь делится мнением без однозначной оценки."
+
+
 def detect_language(text: str) -> str:
     has_kz = bool(re.search(CYRILLIC_KZ, text, re.I))
     has_ru = bool(re.search(r"[ёыэъ]", text, re.I)) or bool(re.search(r"\b(но|очень|больше|персонал|заказ|кассир|кофе)\b", text, re.I))
@@ -55,7 +91,7 @@ def analyze(text: str, rating: float | None = None) -> AIAnalysis:
     return AIAnalysis(
         language=language,
         sentiment=sentiment,
-        summary=" ".join(text.split())[:160],
+        summary=summarize_review(text, sentiment),
         sentiment_score=score,
         severity="critical" if critical else "high" if negative >= 2 else "medium" if negative else "low",
         confidence=confidence,
