@@ -118,6 +118,10 @@ Example source request:
 
 ## Production checklist
 
+Vercel packages Chromium during the build into `.playwright-browsers`. Enable the
+project variable `VERCEL_SUPPORT_LARGE_FUNCTIONS=1`; `/api/health/playwright`
+reports whether the deployed executable is present without exposing credentials.
+
 - Add `GROQ_API_KEY` and `GEMINI_API_KEY`; keep the local classifier as a resilient fallback and build a versioned evaluation set.
 - Move scheduled collection from the in-process queue to a durable Postgres-backed worker before running multiple backend instances.
 - Add real Google/Meta OAuth callbacks and webhook signature validation.
