@@ -48,3 +48,20 @@ def test_serverless_detection_does_not_require_vercel_system_variables(monkeypat
     monkeypatch.setattr(browser_runtime.Path, "is_dir", fake_is_dir)
 
     assert browser_runtime._is_serverless() is True
+
+
+def test_serverless_runtime_exposes_swiftshader_libraries(monkeypatch, tmp_path):
+    runtime = tmp_path / ".serverless-chromium"
+    runtime.mkdir()
+    executable = runtime / "chromium"
+    executable.write_text("browser")
+    executable.chmod(0o755)
+    monkeypatch.setattr(browser_runtime, "_project_root", lambda: tmp_path)
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    monkeypatch.delenv("VK_ICD_FILENAMES", raising=False)
+
+    resolved, _ = browser_runtime._serverless_chromium()
+
+    assert resolved == str(executable)
+    assert str(runtime) in browser_runtime.os.environ["LD_LIBRARY_PATH"]
+    assert browser_runtime.os.environ["VK_ICD_FILENAMES"] == str(runtime / "vk_swiftshader_icd.json")

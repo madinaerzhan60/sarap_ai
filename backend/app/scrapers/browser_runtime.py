@@ -42,8 +42,9 @@ def _serverless_chromium() -> tuple[str, list[str]]:
             raise FileNotFoundError(executable)
         lambda_lib = runtime / "al2023" / "lib"
         os.environ.setdefault("FONTCONFIG_PATH", str(runtime / "fonts"))
+        os.environ.setdefault("VK_ICD_FILENAMES", str(runtime / "vk_swiftshader_icd.json"))
         os.environ["LD_LIBRARY_PATH"] = ":".join(
-            dict.fromkeys([str(lambda_lib), *os.getenv("LD_LIBRARY_PATH", "").split(":")])
+            dict.fromkeys([str(runtime), str(lambda_lib), *os.getenv("LD_LIBRARY_PATH", "").split(":")])
         ).rstrip(":")
         return str(executable), _SERVERLESS_CHROMIUM_ARGS
     except Exception as exc:
