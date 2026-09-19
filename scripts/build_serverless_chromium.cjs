@@ -1,6 +1,11 @@
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+
+// Vercel Functions use the Amazon Linux 2023 runtime, but the build container
+// does not expose the Lambda marker that @sparticuz/chromium uses to decide
+// whether its matching shared libraries must be unpacked.
+process.env.AWS_EXECUTION_ENV ||= "AWS_Lambda_nodejs20.x";
 const chromium = require("@sparticuz/chromium");
 
 async function copyIfPresent(source, destination) {
