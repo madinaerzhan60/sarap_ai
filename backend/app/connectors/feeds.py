@@ -101,17 +101,19 @@ class MonitoredPageConnector(BaseConnector):
                         parser = RobotFileParser(robots_url)
                         parser.parse(robots.text.splitlines())
                         if not parser.can_fetch(user_agent, self.page_url):
-                            return []
-                except httpx.HTTPError:
-                    return []
+                            raise RuntimeError("The source robots.txt does not allow this page to be collected")
+                except httpx.HTTPError as exc:
+                    raise RuntimeError("Could not verify the website robots.txt") from exc
             response = await client.get(self.page_url)
             response.raise_for_status()
         if "text/html" not in response.headers.get("content-type", ""):
-            return []
+            raise RuntimeError("The website did not return an HTML page")
         parser = _VisibleTextParser()
         parser.feed(response.text)
         text = re.sub(r"\s+", " ", " ".join(parser.parts)).strip()[:30_000]
         external_id = hashlib.sha256(text.encode()).hexdigest()
-        if not text or external_id == last_seen_item_id:
+        if not text:
+            raise RuntimeError("The website parser found no readable page content")
+        if external_id == last_seen_item_id:
             return []
         return [RawItem(source=self.source, source_type=MentionType.web_page, external_id=external_id, external_url=self.page_url, text=text, metadata={"host": urlparse(self.page_url).hostname})]

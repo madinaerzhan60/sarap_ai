@@ -295,19 +295,21 @@ async function pollBackendSource(source) {
   }
   const response=await fetch(apiPath(`/api/sources/${source.backendId}/poll`),{method:'POST',headers:await apiAuthHeaders()});
   const body=await response.json();
-  if(!response.ok) throw new Error(body.detail||'Collection failed');
-  source.items+=body.length;
+  if(!response.ok) throw new Error(body.message||body.detail||'Collection failed');
+  const collected=Number(body.collected||0),added=Number(body.new||0),duplicates=Number(body.duplicates||0);
+  source.items+=added;
   source.last='Just now';
-  source.status=body.length?`${body.length} new`:'No new items';
-  source.state=body.length?'live':'';
+  source.status=added?`${added} new`:duplicates?`${duplicates} duplicate${duplicates===1?'':'s'}`:'No new items';
+  source.state=body.status==='success'?'live':'';
   if(!state.session?.demo){
     try{
       await loadProductData();
-      await loadAnalyticsData(body.length>0);
+      await loadAnalyticsData(added>0);
     }catch(error){console.warn('Collection succeeded, but workspace refresh failed:',error);}
   }
   saveState(); render();
-  toast(body.length?'Collection finished':'No new reviews',body.length?`${body.length} review(s) collected and analyzed.`:'The source was reachable, but no new structured reviews were found.');
+  const provider=body.provider?` via ${body.provider}`:'';
+  toast(added?'Collection finished':'Collection finished',added?`${added} new item(s) saved${provider}. ${duplicates} duplicate(s) skipped.`:`The collector succeeded${provider}; ${collected} item(s) returned and ${duplicates} duplicate(s) skipped.`);
 }
 
 function mapStoredSource(source) {

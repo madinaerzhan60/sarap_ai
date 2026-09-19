@@ -403,8 +403,8 @@ class ScrapflyProvider(CollectorProvider):
         html = _first(payload, "result.content", "content", default="")
         if not isinstance(html, str):
             return []
-        if self.platform == "2gis":
-            return extract_map_items(html, PROFILES["2gis"], target_url, limit, self.name)
+        if self.platform in PROFILES:
+            return extract_map_items(html, PROFILES[self.platform], target_url, limit, self.name)
         return _instagram_html_items(html, target_url, limit, self.name)
 
 

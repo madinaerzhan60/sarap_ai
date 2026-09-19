@@ -20,7 +20,8 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-from app.connectors.reviews import ConnectorUnavailable, connector_for, normalize_twogis_business_url
+from app.connectors.reviews import ConnectorUnavailable, normalize_twogis_business_url
+from app.collectors.registry import collector_registry
 from app.connectors.search import FreeSearchProvider, fan_out
 from app.models import DiscoveryRequest, ExtractedReview, MentionType, ProcessedMention, RawItem, ReviewExtractionRequest, ReviewImportRequest, SourceCreate, SourceOAuthCredential, SourceUpdate
 from app.services.llm import analyze_with_cascade, generate_business_recommendations
@@ -364,8 +365,8 @@ async def disconnect_source_credentials(source_id: UUID, context: AuthContext = 
     return {"source_id": str(source_id), "configured": False}
 
 
-@app.post("/api/sources/{source_id}/poll", response_model=list[ProcessedMention])
-async def poll_source(source_id: str, context: AuthContext = Depends(require_user)) -> list[ProcessedMention]:
+@app.post("/api/sources/{source_id}/poll")
+async def poll_source(source_id: str, context: AuthContext = Depends(require_user)) -> JSONResponse:
     source = await repository.get_source(source_id) if repository.configured else next((s for s in sources if s["id"] == source_id), None)
     if not source:
         raise HTTPException(404, "Source not found")
@@ -384,29 +385,45 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
                     source_connection_id=source_id,
                     provider=credential_row["provider"],
                 )
-        connector = connector_for(source, credential_payload)
         last_seen_item_id = source.get("last_seen_item_id")
         if repository.configured and last_seen_item_id:
             complete = await repository.external_item_is_complete(UUID(source["business_id"]), str(source["source"]), last_seen_item_id)
             if not complete:
                 last_seen_item_id = None
-        items = await connector.fetch_latest(last_seen_item_id)
+        collection = await collector_registry.collect(source, credential_payload, last_seen_item_id)
     except (ConnectorUnavailable, CredentialEncryptionError) as exc:
         if repository.configured:
             await repository.update_source(source_id, {"status": "error", "error_message": str(exc), "last_checked_at": datetime.now(timezone.utc).isoformat()})
-        raise HTTPException(409, str(exc)) from exc
+        return JSONResponse(status_code=409, content={"status": "failed", "source": str(source.get("source", "unknown")), "provider": "credentials", "collected": 0, "new": 0, "duplicates": 0, "warnings": [], "error_code": "auth_required", "message": str(exc), "detail": str(exc)})
     except Exception as exc:
         if repository.configured:
             message = f"Source collection failed: {type(exc).__name__}"
             await repository.update_source(source_id, {"status": "error", "error_message": message, "last_checked_at": datetime.now(timezone.utc).isoformat()})
-        raise HTTPException(502, f"Source collection failed: {type(exc).__name__}") from exc
+        message = f"Source collection failed: {type(exc).__name__}"
+        return JSONResponse(status_code=502, content={"status": "failed", "source": str(source.get("source", "unknown")), "provider": "registry", "collected": 0, "new": 0, "duplicates": 0, "warnings": [], "error_code": "collection_failed", "message": message, "detail": message})
+    if not collection.success:
+        if repository.configured:
+            await repository.update_source(source_id, {"status": "error", "error_message": collection.error_message, "last_checked_at": datetime.now(timezone.utc).isoformat()})
+        return JSONResponse(status_code=409, content={
+            "status": "failed", "source": collection.source, "provider": collection.provider,
+            "collected": 0, "new": 0, "duplicates": 0, "warnings": collection.warnings,
+            "error_code": collection.error_code, "message": collection.error_message, "detail": collection.error_message,
+        })
+    items = collection.items
     if items:
         source["last_seen_item_id"] = items[0].external_id
-    source["active_collection_method"] = getattr(connector, "collection_method", connector.connection_type.value)
+    source["active_collection_method"] = collection.provider
     if repository.configured:
         await repository.update_source(source_id, {"last_seen_item_id": source.get("last_seen_item_id"), "active_collection_method": source["active_collection_method"], "last_checked_at": datetime.now(timezone.utc).isoformat(), "status": "active", "error_message": None})
     results = [await process_item(UUID(source["business_id"]), item) for item in items]
-    return results
+    duplicates = sum(1 for result in results if result.duplicate)
+    payload = {
+        "status": "success", "source": collection.source, "provider": collection.provider,
+        "collected": collection.collected_count, "new": len(results) - duplicates,
+        "duplicates": duplicates, "warnings": collection.warnings,
+        "items": [result.model_dump(mode="json") for result in results],
+    }
+    return JSONResponse(content=payload)
 
 
 @app.patch("/api/sources/{source_id}")

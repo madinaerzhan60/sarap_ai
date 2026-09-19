@@ -5,7 +5,8 @@ from app.services.ai import analyze, summarize_review
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
-from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnector, ModularScraperConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
+from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnector, MapFallbackConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
+from app.collectors.registry import SourceType, collector_registry, normalize_source_type
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
 from app.scrapers.fallback import ApifyProvider, CollectorProvider, FallbackPipeline, ProviderNotConfigured, instagram_post_urls, normalize_api_item
@@ -203,9 +204,71 @@ def test_sociavault_profile_items_are_converted_to_canonical_post_urls():
     ]
 
 
-def test_yandex_source_uses_modular_playwright_connector():
+def test_yandex_source_uses_map_fallback_connector():
     connector = connector_for({"source": "Yandex Maps", "collection_mode": "auto", "source_url": "https://yandex.kz/maps/org/example/123/reviews/"})
-    assert isinstance(connector, ModularScraperConnector)
+    assert isinstance(connector, MapFallbackConnector)
+
+
+@pytest.mark.parametrize(("name", "url", "expected"), [
+    ("2GIS", "https://2gis.kz/almaty/firm/1", SourceType.TWO_GIS),
+    ("Google Business", "https://google.com/maps/place/x", SourceType.GOOGLE_MAPS),
+    ("Google Business", "", SourceType.GOOGLE_BUSINESS),
+    ("Yandex Maps", "https://yandex.kz/maps/org/x", SourceType.YANDEX_MAPS),
+    ("Instagram", "https://instagram.com/x", SourceType.INSTAGRAM),
+    ("Threads", "https://threads.net/@x", SourceType.THREADS),
+    ("YouTube", "https://youtube.com/watch?v=3GWEGzQLeWI", SourceType.YOUTUBE),
+    ("Telegram", "https://t.me/x", SourceType.TELEGRAM),
+    ("Website / RSS", "https://example.com/feed.xml", SourceType.RSS),
+    ("Website", "https://example.com", SourceType.WEBSITE),
+])
+def test_source_type_normalization(name, url, expected):
+    assert normalize_source_type(name, url) == expected
+
+
+def test_google_maps_never_uses_generic_static_review_connector():
+    source_type, connector = collector_registry.resolve({
+        "source": "Google Business", "collection_mode": "auto",
+        "source_url": "https://www.google.com/maps/place/example",
+    })
+    assert source_type == SourceType.GOOGLE_MAPS
+    assert isinstance(connector, MapFallbackConnector)
+
+
+def test_missing_telegram_configuration_returns_structured_failure(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_API_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_API_HASH", raising=False)
+    result = asyncio.run(collector_registry.collect({
+        "source": "Telegram", "collection_mode": "api", "source_url": "https://t.me/example",
+    }))
+    assert result.success is False
+    assert result.error_code == "not_configured"
+
+
+def test_browser_unavailable_is_structured_on_vercel(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("SCRAPFLY_API_KEY", raising=False)
+    monkeypatch.delenv("APIFY_YANDEX_MAPS_ACTOR_ID", raising=False)
+    result = asyncio.run(collector_registry.collect({
+        "source": "Yandex Maps", "collection_mode": "auto",
+        "source_url": "https://yandex.kz/maps/org/example/123/reviews/",
+    }))
+    assert result.success is False
+    assert result.error_code == "browser_unavailable"
+    assert result.collected_count == 0
+
+
+def test_empty_dynamic_collection_is_failure(monkeypatch):
+    class EmptyConnector:
+        connection_type = type("Connection", (), {"value": "monitored"})()
+        collection_method = "test_provider"
+
+        async def fetch_latest(self, last_seen_item_id=None):
+            return []
+
+    monkeypatch.setattr(collector_registry, "resolve", lambda source, credentials=None: (SourceType.INSTAGRAM, EmptyConnector()))
+    result = asyncio.run(collector_registry.collect({"source": "Instagram"}))
+    assert result.success is False
+    assert result.error_code == "parser_failed"
 
 
 def test_sociavault_comment_is_normalized():

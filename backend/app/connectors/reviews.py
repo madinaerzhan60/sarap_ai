@@ -333,25 +333,27 @@ class InstagramFallbackConnector(BaseConnector):
 
         proxies = [value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()]
         proxy_pool = ProxyPool(proxies)
-        providers = (
-            [SociaVaultInstagramProfileProvider(os.getenv("SOCIAVAULT_API_KEY"))]
-            if self.is_profile else [
-                PlaywrightProvider(
+        apify = ApifyProvider(
+            "instagram",
+            os.getenv("APIFY_API_TOKEN"),
+            os.getenv("APIFY_INSTAGRAM_ACTOR_ID"),
+            os.getenv("APIFY_INSTAGRAM_INPUT_JSON"),
+        )
+        playwright = PlaywrightProvider(
                     "instagram",
                     lambda: InstagramScraper(
                         cast(SupabaseRawReviewStore, None),
                         proxy_pool,
                         None,
                     ),
-                ),
+                )
+        providers = (
+            [SociaVaultInstagramProfileProvider(os.getenv("SOCIAVAULT_API_KEY")), apify, playwright]
+            if self.is_profile else [
                 SociaVaultProvider(os.getenv("SOCIAVAULT_API_KEY")),
                 SocialCrawlProvider(os.getenv("SOCIALCRAWL_API_KEY")),
-                ApifyProvider(
-                    "instagram",
-                    os.getenv("APIFY_API_TOKEN"),
-                    os.getenv("APIFY_INSTAGRAM_ACTOR_ID"),
-                    os.getenv("APIFY_INSTAGRAM_INPUT_JSON"),
-                ),
+                apify,
+                playwright,
             ]
         )
         pipeline = FallbackPipeline("instagram", providers)
@@ -389,6 +391,8 @@ class ModularScraperConnector(BaseConnector):
         self.source_type = source_type
 
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+        if os.getenv("VERCEL"):
+            raise ConnectorUnavailable("Playwright browser is unavailable in the Vercel runtime")
         scraper = self.scraper_factory()
         try:
             await scraper.connect()
@@ -407,6 +411,61 @@ class ModularScraperConnector(BaseConnector):
             rating=item.rating,
             published_at=item.published_at,
             metadata={**item.metadata, "language": item.language, "collected_by": item.collected_by or self.collection_method},
+        ) for item in scraped]
+        if last_seen_item_id:
+            items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
+        return items
+
+
+class MapFallbackConnector(BaseConnector):
+    """Shared Google/Yandex browser collector with optional provider fallbacks."""
+
+    connection_type = ConnectionType.monitored
+    collection_method = "playwright"
+
+    def __init__(self, platform: str, page_url: str) -> None:
+        if platform not in {"google_maps", "yandex_maps"}:
+            raise ValueError(f"Unsupported map platform: {platform}")
+        self.platform = platform
+        self.source = platform
+        self.page_url = _safe_public_url(page_url)
+
+    async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+        from typing import cast
+
+        from app.scrapers.fallback import ApifyProvider, FallbackPipeline, PlaywrightProvider, ScrapflyProvider
+        from app.scrapers.maps_playwright import GoogleMapsScraper, YandexMapsScraper
+        from app.scrapers.proxy_pool import ProxyPool
+        from app.scrapers.storage import SupabaseRawReviewStore
+
+        proxies = ProxyPool([value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()])
+        scraper_cls = GoogleMapsScraper if self.platform == "google_maps" else YandexMapsScraper
+        env_prefix = "GOOGLE_MAPS" if self.platform == "google_maps" else "YANDEX_MAPS"
+        pipeline = FallbackPipeline(self.platform, [
+            PlaywrightProvider(self.platform, lambda: scraper_cls(cast(SupabaseRawReviewStore, None), proxies)),
+            ScrapflyProvider(self.platform, os.getenv("SCRAPFLY_API_KEY")),
+            ApifyProvider(
+                self.platform,
+                os.getenv("APIFY_API_TOKEN"),
+                os.getenv(f"APIFY_{env_prefix}_ACTOR_ID"),
+                os.getenv(f"APIFY_{env_prefix}_INPUT_JSON"),
+            ),
+        ])
+        scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=100)
+        if not scraped or not provider:
+            detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)
+            raise ConnectorUnavailable(f"{self.platform} collection failed through every configured method. {detail}")
+        self.collection_method = provider
+        items = [RawItem(
+            source=self.source,
+            source_type=MentionType.review,
+            external_id=item.stable_id(),
+            external_url=item.url,
+            author_name=None if item.author == "Unknown" else item.author,
+            text=item.text_content,
+            rating=item.rating,
+            published_at=item.published_at,
+            metadata={**item.metadata, "language": item.language, "collected_by": provider, "fallbacks": failures},
         ) for item in scraped]
         if last_seen_item_id:
             items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
@@ -620,75 +679,7 @@ class InstagramGraphCommentsConnector(BaseConnector):
 
 
 def connector_for(source: dict[str, Any], credentials: dict[str, Any] | None = None) -> BaseConnector:
-    name = str(source["source"]).lower().strip()
-    mode = str(source.get("collection_mode", "auto"))
-    if name in {"2gis", "2gis maps"} and mode == "auto" and os.getenv("ENABLE_DEMO_CONNECTORS", "false").lower() == "true":
-        from app.connectors.demo import DemoTwoGisConnector
-        return DemoTwoGisConnector()
-    if name in {"2gis", "2gis maps"} and mode in {"auto", "scraper"}:
-        page_url = source.get("source_url")
-        if not page_url:
-            raise ConnectorUnavailable("2GIS collection requires the business page URL")
-        return TwoGisPlaywrightConnector(str(page_url))
-    if name in {"instagram", "instagram comments"} and credentials and mode in {"auto", "api"}:
-        return InstagramGraphCommentsConnector(
-            credentials.get("access_token", ""),
-            credentials.get("instagram_user_id"),
-            credentials.get("media_id"),
-        )
-    if name in {"instagram", "instagram comments"} and mode in {"auto", "scraper"}:
-        page_url = source.get("source_url")
-        if not page_url:
-            raise ConnectorUnavailable("Instagram collection requires a public post or reel URL")
-        return InstagramFallbackConnector(str(page_url))
-    if name in {"youtube", "youtube channel"} and mode in {"auto", "scraper"}:
-        page_url = source.get("source_url")
-        if not page_url:
-            raise ConnectorUnavailable("YouTube collection requires a public channel URL")
-        return YouTubePublicConnector(str(page_url))
-    if name in {"yandex", "yandex maps"} and mode in {"auto", "scraper"}:
-        from typing import cast
-        from app.scrapers.maps_playwright import YandexMapsScraper
-        from app.scrapers.proxy_pool import ProxyPool
-        from app.scrapers.storage import SupabaseRawReviewStore
-        page_url = source.get("source_url")
-        if not page_url:
-            raise ConnectorUnavailable("Yandex Maps collection requires the exact business page URL")
-        proxies = ProxyPool([value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()])
-        return ModularScraperConnector("yandex maps", str(page_url), lambda: YandexMapsScraper(cast(SupabaseRawReviewStore, None), proxies), MentionType.review)
-    if name == "threads" and mode in {"auto", "scraper"}:
-        from typing import cast
-        from app.scrapers.proxy_pool import ProxyPool
-        from app.scrapers.social_playwright import ThreadsScraper
-        from app.scrapers.storage import SupabaseRawReviewStore
-        page_url = source.get("source_url")
-        if not page_url:
-            raise ConnectorUnavailable("Threads collection requires a public profile or post URL")
-        proxies = ProxyPool([value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()])
-        return ModularScraperConnector("threads", str(page_url), lambda: ThreadsScraper(cast(SupabaseRawReviewStore, None), proxies, os.getenv("THREADS_STORAGE_STATE")), MentionType.social_post)
-    if name == "telegram" and mode in {"auto", "api"}:
-        from typing import cast
-        from app.scrapers.storage import SupabaseRawReviewStore
-        from app.scrapers.telegram_api import TelegramScraper
-        page_url = source.get("source_url")
-        api_id, api_hash = os.getenv("TELEGRAM_API_ID", ""), os.getenv("TELEGRAM_API_HASH", "")
-        if not page_url:
-            raise ConnectorUnavailable("Telegram monitoring requires a public t.me channel URL")
-        if not api_id or not api_hash:
-            raise ConnectorUnavailable("Telegram monitoring API is not configured. Add TELEGRAM_API_ID and TELEGRAM_API_HASH.")
-        return ModularScraperConnector("telegram", str(page_url), lambda: TelegramScraper(cast(SupabaseRawReviewStore, None), int(api_id), api_hash, os.getenv("TELEGRAM_SESSION", "sarap-telegram")), MentionType.social_post)
-    if mode in {"auto", "api"} and name in {"google", "google business", "google_business"}:
-        if credentials:
-            return GoogleBusinessReviewsConnector(
-                credentials.get("access_token", ""),
-                credentials.get("account_id", ""),
-                credentials.get("location_id", ""),
-            )
-        if mode == "api":
-            raise ConnectorUnavailable("Google Business OAuth is not connected for this workspace source")
-    if mode == "api":
-        raise ConnectorUnavailable(f"No official API connector is configured for {source['source']}")
-    page_url = source.get("source_url")
-    if not page_url:
-        raise ConnectorUnavailable("Scraper fallback requires a public source URL")
-    return ReviewPageScraperConnector(str(page_url), name)
+    """Compatibility entrypoint backed by the unified production registry."""
+    from app.collectors.registry import collector_registry
+
+    return collector_registry.resolve(source, credentials)[1]
