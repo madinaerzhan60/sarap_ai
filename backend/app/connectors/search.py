@@ -110,6 +110,37 @@ class FreeSearchProvider(SearchProvider):
                 results.extend(batch)
         return list({item.url: item for item in results}.values())
 
+    async def search_many(self, queries: list[str], *, country: str = "KZ", date_range: str = "30d") -> tuple[list[SearchResult], list[dict[str, object]]]:
+        """Search news queries concurrently while respecting GDELT's low request rate."""
+        jobs: list[tuple[str, str, SearchProvider]] = [
+            ("google_news", query, GoogleNewsRssProvider()) for query in queries[:3]
+        ]
+        if queries:
+            jobs.append(("gdelt", queries[0], GdeltSearchProvider()))
+
+        async def run(name: str, query: str, provider: SearchProvider) -> tuple[str, list[SearchResult], str | None]:
+            try:
+                rows = await asyncio.wait_for(provider.search(query, "all", country, date_range), timeout=10)
+                return name, rows, None
+            except asyncio.TimeoutError:
+                return name, [], "timeout"
+            except httpx.HTTPStatusError as exc:
+                return name, [], f"HTTP {exc.response.status_code}"
+            except (httpx.HTTPError, KeyError, ValueError, ElementTree.ParseError) as exc:
+                return name, [], type(exc).__name__
+
+        batches = await asyncio.gather(*(run(*job) for job in jobs))
+        results: list[SearchResult] = []
+        grouped: dict[str, dict[str, object]] = {}
+        for name, rows, error in batches:
+            status = grouped.setdefault(name, {"provider": name, "status": "ok", "results": 0})
+            status["results"] = int(status["results"]) + len(rows)
+            if error:
+                status["status"] = "limited" if error in {"timeout", "HTTP 429"} else "error"
+                status["detail"] = error
+            results.extend(rows)
+        return list({item.url: item for item in results}.values()), list(grouped.values())
+
 
 def _gdelt_date(value: str | None) -> datetime | None:
     if not value:

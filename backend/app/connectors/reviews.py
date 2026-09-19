@@ -317,6 +317,8 @@ class InstagramFallbackConnector(BaseConnector):
         host = (urlparse(self.page_url).hostname or "").lower()
         if host not in {"instagram.com", "www.instagram.com"}:
             raise ConnectorUnavailable("Instagram collection requires an instagram.com post or reel URL")
+        if not re.match(r"^/(?:p|reel)/[^/]+/?", urlparse(self.page_url).path):
+            raise ConnectorUnavailable("Instagram comments require a direct /p/... or /reel/... URL, not a profile URL")
 
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         from typing import cast
@@ -364,6 +366,43 @@ class InstagramFallbackConnector(BaseConnector):
             rating=item.rating,
             published_at=item.published_at,
             metadata={**item.metadata, "language": item.language, "collected_by": provider, "fallbacks": failures},
+        ) for item in scraped]
+        if last_seen_item_id:
+            items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
+        return items
+
+
+class ModularScraperConnector(BaseConnector):
+    """Expose the modular scraper implementations through the product source API."""
+
+    connection_type = ConnectionType.monitored
+    collection_method = "playwright"
+
+    def __init__(self, source: str, page_url: str, scraper_factory: Any, source_type: MentionType) -> None:
+        self.source = source
+        self.page_url = _safe_public_url(page_url)
+        self.scraper_factory = scraper_factory
+        self.source_type = source_type
+
+    async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+        scraper = self.scraper_factory()
+        try:
+            await scraper.connect()
+            scraped = scraper.clean_data(await scraper.scrape(self.page_url, 100))
+        except Exception as exc:
+            raise ConnectorUnavailable(str(exc)) from exc
+        finally:
+            await scraper.close()
+        items = [RawItem(
+            source=self.source,
+            source_type=self.source_type,
+            external_id=item.stable_id(),
+            external_url=item.url,
+            author_name=None if item.author == "Unknown" else item.author,
+            text=item.text_content,
+            rating=item.rating,
+            published_at=item.published_at,
+            metadata={**item.metadata, "language": item.language, "collected_by": item.collected_by or self.collection_method},
         ) for item in scraped]
         if last_seen_item_id:
             items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
@@ -603,6 +642,37 @@ def connector_for(source: dict[str, Any], credentials: dict[str, Any] | None = N
         if not page_url:
             raise ConnectorUnavailable("YouTube collection requires a public channel URL")
         return YouTubePublicConnector(str(page_url))
+    if name in {"yandex", "yandex maps"} and mode in {"auto", "scraper"}:
+        from typing import cast
+        from app.scrapers.maps_playwright import YandexMapsScraper
+        from app.scrapers.proxy_pool import ProxyPool
+        from app.scrapers.storage import SupabaseRawReviewStore
+        page_url = source.get("source_url")
+        if not page_url:
+            raise ConnectorUnavailable("Yandex Maps collection requires the exact business page URL")
+        proxies = ProxyPool([value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()])
+        return ModularScraperConnector("yandex maps", str(page_url), lambda: YandexMapsScraper(cast(SupabaseRawReviewStore, None), proxies), MentionType.review)
+    if name == "threads" and mode in {"auto", "scraper"}:
+        from typing import cast
+        from app.scrapers.proxy_pool import ProxyPool
+        from app.scrapers.social_playwright import ThreadsScraper
+        from app.scrapers.storage import SupabaseRawReviewStore
+        page_url = source.get("source_url")
+        if not page_url:
+            raise ConnectorUnavailable("Threads collection requires a public profile or post URL")
+        proxies = ProxyPool([value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()])
+        return ModularScraperConnector("threads", str(page_url), lambda: ThreadsScraper(cast(SupabaseRawReviewStore, None), proxies, os.getenv("THREADS_STORAGE_STATE")), MentionType.social_post)
+    if name == "telegram" and mode in {"auto", "api"}:
+        from typing import cast
+        from app.scrapers.storage import SupabaseRawReviewStore
+        from app.scrapers.telegram_api import TelegramScraper
+        page_url = source.get("source_url")
+        api_id, api_hash = os.getenv("TELEGRAM_API_ID", ""), os.getenv("TELEGRAM_API_HASH", "")
+        if not page_url:
+            raise ConnectorUnavailable("Telegram monitoring requires a public t.me channel URL")
+        if not api_id or not api_hash:
+            raise ConnectorUnavailable("Telegram monitoring API is not configured. Add TELEGRAM_API_ID and TELEGRAM_API_HASH.")
+        return ModularScraperConnector("telegram", str(page_url), lambda: TelegramScraper(cast(SupabaseRawReviewStore, None), int(api_id), api_hash, os.getenv("TELEGRAM_SESSION", "sarap-telegram")), MentionType.social_post)
     if mode in {"auto", "api"} and name in {"google", "google business", "google_business"}:
         if credentials:
             return GoogleBusinessReviewsConnector(

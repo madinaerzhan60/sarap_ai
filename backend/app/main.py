@@ -449,17 +449,14 @@ async def discover(request: DiscoveryRequest, context: AuthContext = Depends(req
     queries = fan_out(request.brand_name, request.aliases, request.city)
     provider = FreeSearchProvider()
     try:
-        batches = await asyncio.wait_for(
-            asyncio.gather(*(provider.search(query, "all", "KZ", "7d") for query in queries[:3])),
-            timeout=12,
-        )
+        results, provider_status = await asyncio.wait_for(provider.search_many(queries, country="KZ", date_range="30d"), timeout=12)
     except asyncio.TimeoutError as exc:
         raise HTTPException(504, "Internet search timed out. Please try again.") from exc
-    results = [item for batch in batches for item in batch]
-    unique = {item.url: item for item in results if item.relevance >= .7}
+    brand_terms = [value.casefold().strip() for value in [request.brand_name, *request.aliases] if len(value.strip()) >= 2]
+    unique = {item.url: item for item in results if item.relevance >= .7 and any(term in f"{item.title} {item.snippet}".casefold() for term in brand_terms)}
     if repository.configured and unique:
         await repository.request("POST", "web_discoveries", params={"on_conflict": "business_id,url"}, json=[{"business_id": str(request.business_id), "url": x.url, "title": x.title, "snippet": x.snippet, "relevance": x.relevance, **({"discovered_at": x.published_at.isoformat()} if x.published_at else {})} for x in unique.values()], prefer="resolution=merge-duplicates")
-    return {"queries_generated": len(queries), "results": list(unique.values())}
+    return {"queries_generated": len(queries), "results": list(unique.values()), "providers": provider_status, "window": "30d"}
 
 
 @app.get("/api/admin/overview")

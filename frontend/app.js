@@ -322,12 +322,15 @@ function uniqueSources(items) {
 }
 
 function sourceUrlProblem(sourceName,url){
-  if(!url||!String(sourceName).toLowerCase().includes('2gis'))return '';
+  if(!url)return '';
   try{
     const parsed=new URL(url);
-    if(!(parsed.hostname.startsWith('2gis.')||parsed.hostname.includes('.2gis.')))return 'Use a link from the 2GIS business card.';
-    if(!/\/firm\/\d+(?:\/|$)/.test(parsed.pathname))return 'Open the exact company card and copy a link containing /firm/ followed by its numeric company ID.';
-  }catch{return 'Paste a valid 2GIS business page URL.';}
+    if(String(sourceName).toLowerCase().includes('2gis')){
+      if(!(parsed.hostname.startsWith('2gis.')||parsed.hostname.includes('.2gis.')))return 'Use a link from the 2GIS business card.';
+      if(!/\/firm\/\d+(?:\/|$)/.test(parsed.pathname))return 'Open the exact company card and copy a link containing /firm/ followed by its numeric company ID.';
+    }
+    if(sourceName==='Instagram'&&!/^\/(?:p|reel)\/[^/]+\/?/.test(parsed.pathname))return 'Instagram comments need a direct post or reel link: /p/... or /reel/...';
+  }catch{return 'Paste a valid source URL.';}
   return '';
 }
 
@@ -606,7 +609,7 @@ document.addEventListener('click', async e => {
   }
   if(action==='alert-status'){const a=state.alerts.find(x=>x.id===target.dataset.id);a.status=a.status==='Resolved'?'New':'Resolved';if(!state.session?.demo)await db(`/alerts?id=eq.${a.id}`,{method:'PATCH',body:{status:a.status.toLowerCase(),resolved_at:a.status==='Resolved'?new Date().toISOString():null}});saveState();render();}
   if(action==='configure-alerts'){currentSettingsTab='Alerts';setRoute('settings');}
-  if(action==='scan-web'){const list=document.querySelector('#discover-list');target.disabled=true;target.textContent='Scanning…';if(list)list.innerHTML='<div class="skeleton"></div><div class="skeleton"></div>';try{if(state.session?.demo){setTimeout(()=>{render();toast('Demo scan complete','Sample web discoveries are shown.');},500);}else{const response=await fetch(apiPath('/api/discover'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({business_id:state.business.id,brand_name:state.business.name,aliases:state.business.aliases,city:state.business.city,country:state.business.country})});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Discovery failed');await loadProductData();render();toast('Web scan complete',state.discoveries.length?`${state.discoveries.length} relevant discoveries saved.`:'No relevant public results were found for the current brand names.');}}catch(error){render();toast('Web scan unavailable',error.message);}}
+  if(action==='scan-web'){const list=document.querySelector('#discover-list');target.disabled=true;target.textContent='Scanning 30 days…';if(list)list.innerHTML='<div class="skeleton"></div><div class="skeleton"></div>';try{if(state.session?.demo){setTimeout(()=>{render();toast('Demo scan complete','Sample web discoveries are shown.');},500);}else{const response=await fetch(apiPath('/api/discover'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({business_id:state.business.id,brand_name:state.business.name,aliases:state.business.aliases,city:state.business.city,country:state.business.country})});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Discovery failed');await loadProductData();render();const providers=(body.providers||[]).map(x=>`${x.provider}: ${x.status}${x.results?` (${x.results})`:''}`).join(' · ');toast(state.discoveries.length?'Web scan complete':'No matching mentions',`${state.discoveries.length?`${state.discoveries.length} relevant discoveries saved. `:'No result contained the configured brand name. '}${providers}`);}}catch(error){render();toast('Web scan unavailable',error.message);}}
   if(action==='admin-flag'){try{const response=await fetch(apiPath(`/api/admin/feature-flags/${encodeURIComponent(target.dataset.key)}`),{method:'PATCH',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({enabled:target.dataset.enabled!=='true'})});if(!response.ok)throw new Error((await response.json()).detail||'Update failed');await loadAdminData();}catch(error){toast('Could not update flag',error.message);}}
   if(action==='admin-setting'){try{const response=await fetch(apiPath(`/api/admin/system-settings/${encodeURIComponent(target.dataset.key)}`),{method:'PATCH',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({value:JSON.parse(target.dataset.value)})});if(!response.ok)throw new Error((await response.json()).detail||'Update failed');await loadAdminData();}catch(error){toast('Could not update setting',error.message);}}
   if(action==='save-risk-default'){const value=Number(document.querySelector('#admin-risk-default')?.value);if(!Number.isFinite(value)||value<0||value>100){toast('Invalid threshold','Enter a value from 0 to 100.');return;}try{const response=await fetch(apiPath('/api/admin/system-settings/default_risk_threshold'),{method:'PATCH',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({value:{value}})});if(!response.ok)throw new Error((await response.json()).detail||'Update failed');await loadAdminData();toast('Default saved',`New workspaces will start at risk ${value}.`);}catch(error){toast('Could not save default',error.message);}}
@@ -643,7 +646,7 @@ document.addEventListener('submit', async e => {
     if(d.name==='CSV Import')d.method='import';
     if(d.method==='scraper'&&!d.url){toast('URL required','Scraper mode needs a public source URL.');return;}
     const urlProblem=sourceUrlProblem(d.name,d.url);
-    if(urlProblem){toast('Invalid 2GIS link',urlProblem);return;}
+    if(urlProblem){toast('Invalid source link',urlProblem);return;}
     const collectionMode=d.method==='import'?'auto':d.method;
     const duplicate=state.sources.some(s=>s.name===d.name&&s.collectionMode===collectionMode&&(s.sourceUrl||'')===(d.url||''));
     if(duplicate){toast('Already connected','This source and collection strategy already exist.');return;}
@@ -663,7 +666,7 @@ document.addEventListener('submit', async e => {
   if(kind==='source-edit'){
     const data=fieldData(form);const source=state.sources.find(item=>item.id===form.dataset.sourceId);if(!source)return;
     const urlProblem=sourceUrlProblem(source.name,data.url);
-    if(urlProblem){toast('Invalid 2GIS link',urlProblem);return;}
+    if(urlProblem){toast('Invalid source link',urlProblem);return;}
     try{
       if(state.session?.demo){Object.assign(source,{sourceUrl:data.url,collectionMode:data.method,method:data.method==='scraper'?'URL scraper':data.method==='api'?'API only':'Auto · API preferred',status:'Active',state:'live',description:data.url,last:'—',next:'—',errors:0,backendId:null});closeModal();saveState();render();toast('Source updated','Collection state was reset. Test collection again.');return;}
       const response=await fetch(apiPath(`/api/sources/${encodeURIComponent(source.id)}`),{method:'PATCH',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({source_url:data.url,collection_mode:data.method})});

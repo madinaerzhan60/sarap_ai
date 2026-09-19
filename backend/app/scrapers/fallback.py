@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from datetime import datetime
@@ -287,6 +288,11 @@ class ScrapflyProvider(CollectorProvider):
             response = await client.get(self.endpoint, params=params)
         _raise_for_provider_status(response, self.name)
         payload = response.json()
+        if self.platform == "2gis":
+            requested = re.search(r"/firm/(\d+)", target_url)
+            final_url = str(_first(payload, "result.url", "url", default=target_url))
+            if not requested or not re.search(rf"/firm/{re.escape(requested.group(1))}(?:/|$)", final_url):
+                raise ProviderError("scrapfly: 2GIS redirected away from the requested firm")
         html = _first(payload, "result.content", "content", default="")
         if not isinstance(html, str):
             return []
@@ -315,8 +321,12 @@ class ApifyProvider(CollectorProvider):
         if self.input_json:
             run_input = json.loads(self.input_json)
         elif self.platform == "2gis" and self.actor_id == "getascraper/2gis-reviews-scraper":
+            firm_match = re.search(r"/firm/(\d+)", target_url)
+            if not firm_match:
+                raise ProviderError("apify: no /firm/<id> in URL")
             run_input = {
-                "urls": [target_url],
+                "firmIds": [firm_match.group(1)],
+                "urls": [],
                 "maxItemsPerFirm": maximum,
                 "withTextOnly": True,
                 "includeRawData": False,
@@ -325,6 +335,12 @@ class ApifyProvider(CollectorProvider):
             run_input = {"directUrls": [target_url], "resultsLimit": maximum}
         else:
             run_input = {"startUrls": [{"url": target_url}], "maxItems": maximum}
+        if self.platform == "2gis":
+            firm_match = re.search(r"/firm/(\d+)", target_url)
+            if not firm_match:
+                raise ProviderError("apify: no /firm/<id> in URL")
+            run_input["firmIds"] = [firm_match.group(1)]
+            run_input["urls"] = []
         actor_path = self.actor_id.replace("/", "~")
         endpoint = f"https://api.apify.com/v2/acts/{actor_path}/run-sync-get-dataset-items"
         timeout_seconds = int(os.getenv("APIFY_RUN_TIMEOUT_SECONDS", "300"))
@@ -339,9 +355,14 @@ class ApifyProvider(CollectorProvider):
         if not isinstance(rows, list):
             raise ProviderError("apify: actor returned an unexpected response")
         results: list[ScrapedItem] = []
+        requested_firm = re.search(r"/firm/(\d+)", target_url) if self.platform == "2gis" else None
         for row in rows[:maximum]:
             if not isinstance(row, dict):
                 continue
+            if requested_firm:
+                row_firm = str(_first(row, "firmId", "firm_id", "firm.id", default=""))
+                if row_firm and row_firm != requested_firm.group(1):
+                    continue
             item = normalize_api_item(row, self.platform, target_url, self.name)
             if item:
                 results.append(item)

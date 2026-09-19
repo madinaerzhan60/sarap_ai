@@ -5,10 +5,10 @@ from app.services.ai import analyze
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
-from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
+from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnector, ModularScraperConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
-from app.scrapers.fallback import CollectorProvider, FallbackPipeline, normalize_api_item
+from app.scrapers.fallback import ApifyProvider, CollectorProvider, FallbackPipeline, normalize_api_item
 from app.scrapers.models import ScrapedItem
 import asyncio
 import pytest
@@ -136,6 +136,16 @@ def test_instagram_source_uses_fallback_connector():
     assert isinstance(connector, InstagramFallbackConnector)
 
 
+def test_instagram_profile_url_is_rejected_for_comments():
+    with pytest.raises(ConnectorUnavailable, match="direct /p/"):
+        InstagramFallbackConnector("https://www.instagram.com/brand/")
+
+
+def test_yandex_source_uses_modular_playwright_connector():
+    connector = connector_for({"source": "Yandex Maps", "collection_mode": "auto", "source_url": "https://yandex.kz/maps/org/example/123/reviews/"})
+    assert isinstance(connector, ModularScraperConnector)
+
+
 def test_sociavault_comment_is_normalized():
     item = normalize_api_item(
         {
@@ -193,6 +203,34 @@ def test_apify_2gis_review_is_normalized():
     assert item.author == "Александра"
     assert item.rating == 5
     assert item.metadata["business_reply"] == "Спасибо!"
+
+
+def test_apify_2gis_sends_firm_id_and_filters_foreign_rows(monkeypatch):
+    captured = {}
+
+    class Response:
+        status_code = 201
+        def raise_for_status(self): return None
+        def json(self):
+            return [
+                {"id": "wrong", "firmId": "4504127912651411", "text": "Отзыв про 2ГИС"},
+                {"id": "right", "firmId": "70000001035980354", "text": "Отзыв про 1Fit"},
+            ]
+
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+        async def post(self, endpoint, *, params, json):
+            captured.update(json)
+            return Response()
+
+    monkeypatch.setattr("app.scrapers.fallback.httpx.AsyncClient", Client)
+    provider = ApifyProvider("2gis", "token", "getascraper/2gis-reviews-scraper")
+    rows = asyncio.run(provider.collect("https://2gis.kz/almaty/firm/70000001035980354/tab/reviews", 10))
+    assert captured["firmIds"] == ["70000001035980354"]
+    assert captured["urls"] == []
+    assert [row.text_content for row in rows] == ["Отзыв про 1Fit"]
 
 
 def test_fallback_pipeline_uses_next_provider_after_empty_result():

@@ -120,6 +120,10 @@ class PlaywrightMapScraper(BaseScraper):
             raise RuntimeError("connect() must run before scrape()")
         page = await self.context.new_page()
         await page.goto(query, wait_until="domcontentloaded", timeout=45_000)
+        if self.profile.source == "2GIS":
+            requested = re.search(r"/firm/(\d+)", query)
+            if not requested or not re.search(rf"/firm/{re.escape(requested.group(1))}(?:/|$)", page.url):
+                raise ScraperBlocked("2GIS redirected away from the requested company card")
         body_text = (await page.locator("body").inner_text()).casefold()
         blocked = ("captcha", "капча", "подтвердите, что вы не робот", "подозрительную активность", "access denied")
         if "captcha.2gis." in page.url or any(marker in body_text for marker in blocked):
