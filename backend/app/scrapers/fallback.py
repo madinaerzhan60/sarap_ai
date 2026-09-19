@@ -101,7 +101,7 @@ def normalize_api_item(row: dict[str, Any], platform: str, target_url: str, coll
     external_id = str(_first(row, "id", "comment_id", "commentId", "review_id", "reviewId", default="")) or None
     published = _datetime(_first(row, "created_at", "createdAt", "published_at", "publishedAt", "publishedTime", "dateCreated", "date", "timestamp"))
     metadata = {
-        "likes_count": _first(row, "likes_count", "likesCount", "likes", "likeCount", "engagement.likes", default=0),
+        "likes_count": _first(row, "likes_count", "likesCount", "likes", "likeCount", "comment_like_count", "engagement.likes", default=0),
         "business_reply": _first(row, "replyText", "business_reply"),
         "raw_provider_fields": sorted(row.keys()),
     }
@@ -206,16 +206,17 @@ def instagram_profile_handle(target_url: str) -> str | None:
 def instagram_post_urls(payload: Any) -> list[str]:
     """Extract canonical post/reel URLs from the profile-posts response."""
     data = payload.get("data", {}) if isinstance(payload, dict) else {}
-    rows = _list(data.get("posts") if isinstance(data, dict) else None)
+    rows = _list(_first(data, "items", "posts") if isinstance(data, dict) else None)
     urls: list[str] = []
     for row in rows:
         direct_url = _first(row, "url", "permalink", "post_url", "postUrl")
         shortcode = _first(row, "shortcode", "code", "node.shortcode")
         product_type = str(_first(row, "product_type", "productType", "media_type", default="")).casefold()
-        if isinstance(direct_url, str) and re.match(r"^https://(?:www\.)?instagram\.com/(?:p|reel)/[^/]+", direct_url):
-            url = direct_url
+        direct_match = re.search(r"instagram\.com/(?:[^/]+/)?(p|reel)/([^/?#]+)", direct_url) if isinstance(direct_url, str) else None
+        if direct_match:
+            url = f"https://www.instagram.com/{direct_match.group(1)}/{direct_match.group(2)}/"
         elif shortcode:
-            route = "reel" if "reel" in product_type else "p"
+            route = "reel" if "reel" in product_type or product_type == "clips" else "p"
             url = f"https://www.instagram.com/{route}/{shortcode}/"
         else:
             continue

@@ -8,7 +8,7 @@ from app.services.polling import next_poll
 from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnector, ModularScraperConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
-from app.scrapers.fallback import ApifyProvider, CollectorProvider, FallbackPipeline, ProviderNotConfigured, normalize_api_item
+from app.scrapers.fallback import ApifyProvider, CollectorProvider, FallbackPipeline, ProviderNotConfigured, instagram_post_urls, normalize_api_item
 from app.scrapers.models import ScrapedItem
 import asyncio
 import pytest
@@ -186,6 +186,21 @@ def test_instagram_profile_url_is_supported():
 def test_instagram_system_route_is_rejected():
     with pytest.raises(ConnectorUnavailable, match="profile, post or reel"):
         InstagramFallbackConnector("https://www.instagram.com/explore/")
+
+
+def test_sociavault_profile_items_are_converted_to_canonical_post_urls():
+    payload = {"data": {"items": {"0": {
+        "code": "DdQihHQjA43",
+        "product_type": "carousel_container",
+        "url": "https://www.instagram.com/1fit.app/p/DdQihHQjA43/",
+    }, "1": {
+        "code": "ReelCode",
+        "product_type": "clips",
+    }}}}
+    assert instagram_post_urls(payload) == [
+        "https://www.instagram.com/p/DdQihHQjA43/",
+        "https://www.instagram.com/reel/ReelCode/",
+    ]
 
 
 def test_yandex_source_uses_modular_playwright_connector():
