@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,36 @@ def _project_browser_path() -> Path:
     return Path(__file__).resolve().parents[3] / ".playwright-browsers"
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _serverless_chromium() -> tuple[str, list[str]]:
+    """Extract the Lambda-compatible browser and return its recommended flags."""
+    helper = _project_root() / "scripts" / "serverless_chromium.cjs"
+    try:
+        result = subprocess.run(
+            ["node", str(helper)],
+            cwd=_project_root(),
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        executable = str(payload["executablePath"])
+        args = [str(value) for value in payload.get("args", [])]
+        if not Path(executable).is_file():
+            raise FileNotFoundError(executable)
+        return executable, args
+    except Exception as exc:
+        detail = (getattr(exc, "stderr", "") or str(exc)).strip().splitlines()[0]
+        raise BrowserRuntimeError(
+            "chromium_not_installed",
+            f"Serverless Chromium is unavailable: {detail}",
+        ) from exc
+
+
 def configure_browser_path() -> str | None:
     configured = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "").strip()
     if configured:
@@ -34,6 +66,12 @@ def configure_browser_path() -> str | None:
 def browser_diagnostics() -> dict[str, Any]:
     configured_path = configure_browser_path()
     explicit = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "").strip()
+    serverless_error: str | None = None
+    if os.getenv("VERCEL") and not explicit:
+        try:
+            explicit, _ = _serverless_chromium()
+        except BrowserRuntimeError as exc:
+            serverless_error = str(exc)
     candidates: list[Path] = []
     if explicit:
         candidates.append(Path(explicit))
@@ -50,6 +88,8 @@ def browser_diagnostics() -> dict[str, Any]:
         "chromium_path_available": bool(found and os.access(found, os.X_OK)),
         "chromium_location": str(found) if found else None,
         "browser_store": configured_path,
+        "runtime": "sparticuz" if os.getenv("VERCEL") else "playwright",
+        "runtime_error": serverless_error,
     }
 
 
@@ -68,9 +108,16 @@ class BrowserManager:
         playwright = await async_playwright().start()
         explicit = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "").strip()
         mac_chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        serverless_args: list[str] = []
+        if os.getenv("VERCEL") and not explicit:
+            try:
+                explicit, serverless_args = _serverless_chromium()
+            except BrowserRuntimeError:
+                await playwright.stop()
+                raise
         if not explicit and Path(mac_chrome).is_file() and not os.getenv("VERCEL"):
             explicit = mac_chrome
-        args = ["--no-sandbox", "--disable-dev-shm-usage"] if os.getenv("VERCEL") or os.name == "posix" and not Path(mac_chrome).is_file() else []
+        args = serverless_args or (["--no-sandbox", "--disable-dev-shm-usage"] if os.getenv("VERCEL") or os.name == "posix" and not Path(mac_chrome).is_file() else [])
         try:
             expected = Path(explicit or playwright.chromium.executable_path)
             if not expected.is_file():
