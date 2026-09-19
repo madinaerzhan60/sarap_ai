@@ -9,8 +9,9 @@ from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnec
 from app.collectors.registry import SourceType, collector_registry, normalize_source_type
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
-from app.scrapers.fallback import ApifyProvider, CollectorProvider, FallbackPipeline, ProviderNotConfigured, instagram_post_urls, normalize_api_item
+from app.scrapers.fallback import ApifyProvider, CollectorProvider, ConfirmedEmptyResult, FallbackPipeline, instagram_post_urls, normalize_api_item
 from app.scrapers.models import ScrapedItem
+from app.scrapers.maps_playwright import PROFILES, extract_map_items, google_navigation_url
 import asyncio
 import pytest
 from app.services.telegram import business_from_token, connection_token
@@ -244,16 +245,16 @@ def test_missing_telegram_configuration_returns_structured_failure(monkeypatch):
     assert result.error_code == "not_configured"
 
 
-def test_browser_unavailable_is_structured_on_vercel(monkeypatch):
-    monkeypatch.setenv("VERCEL", "1")
+def test_browser_error_is_structured(monkeypatch):
     monkeypatch.delenv("SCRAPFLY_API_KEY", raising=False)
     monkeypatch.delenv("APIFY_YANDEX_MAPS_ACTOR_ID", raising=False)
+    monkeypatch.setenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "/missing/chromium")
     result = asyncio.run(collector_registry.collect({
         "source": "Yandex Maps", "collection_mode": "auto",
         "source_url": "https://yandex.kz/maps/org/example/123/reviews/",
     }))
     assert result.success is False
-    assert result.error_code == "browser_unavailable"
+    assert result.error_code in {"chromium_not_installed", "browser_launch_failed"}
     assert result.collected_count == 0
 
 
@@ -383,10 +384,99 @@ def test_fallback_pipeline_uses_next_provider_after_empty_result():
     assert result["saved"] == 1
 
 
-def test_playwright_provider_skips_browser_on_vercel(monkeypatch):
+def test_playwright_provider_runs_on_vercel(monkeypatch):
     from app.scrapers.fallback import PlaywrightProvider
 
+    calls = []
+
+    class Scraper:
+        async def connect(self):
+            calls.append("connect")
+
+        async def scrape(self, target_url, limit):
+            calls.append("scrape")
+            return [ScrapedItem(source="2GIS", text_content="Отличный сервис")]
+
+        def clean_data(self, items):
+            return items
+
+        async def close(self):
+            calls.append("close")
+
     monkeypatch.setenv("VERCEL", "1")
-    provider = PlaywrightProvider("2gis", lambda: None)
-    with pytest.raises(ProviderNotConfigured, match="unavailable on Vercel"):
-        asyncio.run(provider.collect("https://2gis.kz/almaty/firm/70000001035980354/tab/reviews", 10))
+    provider = PlaywrightProvider("2gis", Scraper)
+    result = asyncio.run(provider.collect("https://2gis.kz/almaty/firm/70000001035980354/tab/reviews", 10))
+    assert len(result) == 1
+    assert calls == ["connect", "scrape", "close"]
+
+
+def test_confirmed_empty_stops_paid_fallback():
+    calls = []
+
+    class EmptyPrimary(CollectorProvider):
+        name = "playwright"
+        platform = "google_maps"
+
+        async def collect(self, target_url, limit):
+            calls.append(self.name)
+            raise ConfirmedEmptyResult("page confirms there are no reviews")
+
+    class PaidProvider(CollectorProvider):
+        name = "paid"
+        platform = "google_maps"
+
+        async def collect(self, target_url, limit):
+            calls.append(self.name)
+            return [ScrapedItem(source="Google Maps", text_content="Should not be fetched")]
+
+    items, provider, failures = asyncio.run(
+        FallbackPipeline("google_maps", [EmptyPrimary(), PaidProvider()]).collect_items("https://example.com", 10)
+    )
+    assert items == []
+    assert provider == "playwright"
+    assert failures == []
+    assert calls == ["playwright"]
+
+
+def test_successful_primary_does_not_call_paid_fallback():
+    calls = []
+
+    class Primary(CollectorProvider):
+        name = "playwright"
+        platform = "google_maps"
+
+        async def collect(self, target_url, limit):
+            calls.append(self.name)
+            return [ScrapedItem(source="Google Maps", text_content="Реальный отзыв клиента")]
+
+    class Paid(CollectorProvider):
+        name = "apify"
+        platform = "google_maps"
+
+        async def collect(self, target_url, limit):
+            calls.append(self.name)
+            raise AssertionError("paid fallback must not run")
+
+    items, provider, failures = asyncio.run(
+        FallbackPipeline("google_maps", [Primary(), Paid()]).collect_items("https://example.com", 10)
+    )
+    assert len(items) == 1
+    assert provider == "playwright"
+    assert failures == []
+    assert calls == ["playwright"]
+
+
+def test_google_name_coordinate_url_resolves_through_search():
+    url = "https://www.google.com/maps/place/1Fit/@43.2359704,76.8815134,17z"
+    assert google_navigation_url(url) == "https://www.google.com/maps/search/1Fit/@43.2359704,76.8815134,17z"
+
+
+def test_google_review_card_selector_extracts_review():
+    html = '''<div class="jftiEf" data-review-id="review-1">
+      <div class="d4r55">Aida</div><span class="kvMYJc" aria-label="4 stars"></span>
+      <span class="rsqaWe">2 months ago</span><span class="wiI7pd">Хороший сервис и удобное приложение</span>
+    </div>'''
+    items = extract_map_items(html, PROFILES["google_maps"], "https://maps.google.com", 10, "playwright")
+    assert [(item.author, item.rating, item.text_content) for item in items] == [
+        ("Aida", 4.0, "Хороший сервис и удобное приложение")
+    ]

@@ -32,6 +32,7 @@ from app.services.telegram import business_from_token, connection_token, send_al
 from app.services.source_credentials import CredentialEncryptionError, SourceCredentialVault
 from app.security import AuthContext, require_admin_context, require_business_member, require_user
 from app.repository import RepositoryUnavailable, SourceAlreadyConnected, repository
+from app.scrapers.browser_runtime import browser_diagnostics
 
 app = FastAPI(title="SARAP API", version="0.2.0", description="Reputation intelligence platform for Kazakhstan and the CIS")
 frontend_origins = {"http://localhost:5173", "http://127.0.0.1:5173"}
@@ -94,6 +95,16 @@ def health() -> JSONResponse:
     accounts_ready = bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_ANON_KEY"))
     return JSONResponse(
         {"status": "ok", "service": "sarap-api", "accounts": "connected" if accounts_ready else "setup_required"},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/health/playwright")
+def playwright_health() -> JSONResponse:
+    """Safe deployment diagnostics; never returns credentials or proxy values."""
+    details = browser_diagnostics()
+    return JSONResponse(
+        {"status": "ok" if details["chromium_path_available"] else "setup_required", **details},
         headers={"Cache-Control": "no-store"},
     )
 

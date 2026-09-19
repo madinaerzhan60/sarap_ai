@@ -72,17 +72,22 @@ class CollectionResult:
 
 def _error_code(message: str) -> str:
     lowered = message.casefold()
+    for code in ("chromium_not_installed", "browser_launch_failed", "navigation_timeout", "parser_failed"):
+        if code in lowered:
+            return code
     if "oauth" in lowered or "token has expired" in lowered or "access token" in lowered:
         return "auth_required"
     if "playwright" in lowered or "chromium" in lowered or "browser" in lowered or "executable doesn't exist" in lowered:
-        return "browser_unavailable"
+        return "browser_launch_failed"
     if "not configured" in lowered or "is empty" in lowered or "requires" in lowered and "api" in lowered:
         return "not_configured"
     if "429" in lowered or "rate limit" in lowered or "quota" in lowered:
         return "rate_limited"
-    if "captcha" in lowered or "verification" in lowered or "blocked" in lowered:
+    if "captcha" in lowered or "verification" in lowered:
+        return "captcha"
+    if "blocked" in lowered or "robots.txt" in lowered:
         return "blocked"
-    if "empty result" in lowered or "no public" in lowered or "no structured" in lowered:
+    if "empty result" in lowered or "no public" in lowered or "no structured" in lowered or "selectors found no items" in lowered:
         return "parser_failed"
     return "collection_failed"
 
@@ -177,7 +182,8 @@ class CollectorRegistry:
             source_type, connector = self.resolve(source, credentials)
             items = await connector.fetch_latest(last_seen_item_id)
             provider = str(getattr(connector, "collection_method", connector.connection_type.value))
-            if not items and source_type not in {SourceType.RSS, SourceType.WEBSITE, SourceType.GOOGLE_BUSINESS, SourceType.TELEGRAM}:
+            confirmed_empty = bool(getattr(connector, "confirmed_empty", False))
+            if not items and not confirmed_empty and source_type not in {SourceType.RSS, SourceType.WEBSITE, SourceType.GOOGLE_BUSINESS, SourceType.TELEGRAM}:
                 message = f"{source_type.value} collector returned no structured items; the parser or provider may be unavailable"
                 logger.warning("source=%s provider=%s status=failed reason=parser_failed", source_type.value, provider)
                 return CollectionResult(False, source_type.value, provider, error_code="parser_failed", error_message=message)

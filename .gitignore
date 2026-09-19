@@ -8,6 +8,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.playwright-browsers/
 
 # Frontend and editor artifacts
 node_modules/

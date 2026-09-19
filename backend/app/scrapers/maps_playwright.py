@@ -6,13 +6,13 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup
-from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
+from playwright.async_api import Browser, BrowserContext, Playwright, TimeoutError as PlaywrightTimeoutError
 
-from app.scrapers.base import BaseScraper, ScraperBlocked
+from app.scrapers.base import BaseScraper, ScraperBlocked, ScraperEmptyConfirmed
+from app.scrapers.browser_runtime import BrowserRuntimeError, launch_chromium
 from app.scrapers.models import ScrapedItem
 from app.scrapers.proxy_pool import ProxyPool
 from app.scrapers.storage import SupabaseRawReviewStore
@@ -30,9 +30,16 @@ class MapProfile:
 
 PROFILES = {
     "2gis": MapProfile("2GIS", ('[itemtype*="schema.org/Review"]', '[data-testid*="review"]', 'article'), ('[itemprop="author"]', '[class*="author"]'), ('[itemprop="reviewBody"]', '[class*="review"] p'), ('[itemprop="ratingValue"]', '[aria-label*="оцен"]'), ('[itemprop="datePublished"]', 'time')),
-    "google_maps": MapProfile("Google Maps", ('div[data-review-id]', 'div.jftiEf'), ('.d4r55', '[class*="author"]'), ('.wiI7pd', '[data-expandable-section]'), ('span.kvMYJc', '[aria-label*="star"]'), ('.rsqaWe', 'time')),
+    "google_maps": MapProfile("Google Maps", ('div.jftiEf', 'div[data-review-id]'), ('.d4r55', '[class*="author"]'), ('.wiI7pd', '[data-expandable-section]'), ('span.kvMYJc', '[aria-label*="star"]'), ('.rsqaWe', 'time')),
     "yandex_maps": MapProfile("Yandex Maps", ('.business-review-view', '[class*="business-review"]'), ('.business-review-view__author', '[class*="author"]'), ('.business-review-view__body-text', '[class*="body-text"]'), ('[aria-label*="оценка"]', '[class*="rating"]'), ('.business-review-view__date', 'time')),
 }
+
+
+def google_navigation_url(url: str) -> str:
+    """Resolve name+coordinates links through search so headless Maps keeps the place."""
+    if "/maps/place/" in url and "/data=" not in url:
+        return url.replace("/maps/place/", "/maps/search/", 1)
+    return url
 
 
 def _first_text(node: Any, selectors: tuple[str, ...]) -> str | None:
@@ -107,19 +114,24 @@ class PlaywrightMapScraper(BaseScraper):
 
     async def connect(self) -> None:
         proxy = await self.proxy_pool.next()
-        self.playwright = await async_playwright().start()
-        executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "").strip()
-        mac_chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        if not executable and Path(mac_chrome).is_file():
-            executable = mac_chrome
-        self.browser = await self.playwright.chromium.launch(headless=True, proxy=proxy.playwright() if proxy else None, executable_path=executable or None)
+        self.playwright, self.browser = await launch_chromium(proxy.playwright() if proxy else None)
         self.context = await self.browser.new_context(locale="ru-KZ", timezone_id="Asia/Almaty", viewport={"width": 1280, "height": 900})
 
     async def scrape(self, query: str, limit: int = 50) -> list[ScrapedItem]:
         if not self.context:
             raise RuntimeError("connect() must run before scrape()")
         page = await self.context.new_page()
-        await page.goto(query, wait_until="domcontentloaded", timeout=45_000)
+        navigation_url = query
+        # A Google URL containing only a name and coordinates can resolve to
+        # /place// in headless mode. The equivalent search route resolves the
+        # actual place ID first and then opens the same business card.
+        if self.profile.source == "Google Maps":
+            navigation_url = google_navigation_url(query)
+        try:
+            await page.goto(navigation_url, wait_until="domcontentloaded", timeout=45_000)
+            await page.wait_for_timeout(3_000)
+        except PlaywrightTimeoutError as exc:
+            raise BrowserRuntimeError("navigation_timeout", f"{self.source} navigation timed out") from exc
         if self.profile.source == "2GIS":
             requested = re.search(r"/firm/(\d+)", query)
             if not requested or not re.search(rf"/firm/{re.escape(requested.group(1))}(?:/|$)", page.url):
@@ -128,6 +140,13 @@ class PlaywrightMapScraper(BaseScraper):
         blocked = ("captcha", "капча", "подтвердите, что вы не робот", "подозрительную активность", "access denied")
         if "captcha.2gis." in page.url or any(marker in body_text for marker in blocked):
             raise ScraperBlocked(f"{self.source} requested manual verification")
+        if self.profile.source == "Google Maps":
+            for selector in ('button[jsaction*="pane.reviewChart.moreReviews"]', 'button[aria-label*="Reviews"]', 'button[aria-label*="отзыв"]'):
+                button = page.locator(selector).first
+                if await button.count():
+                    await button.click()
+                    await page.wait_for_timeout(1_500)
+                    break
         previous_height = 0
         max_scrolls = min(max(12, limit // 10), int(os.getenv("PLAYWRIGHT_MAX_SCROLLS", "200")))
         for _ in range(max_scrolls):
@@ -137,7 +156,13 @@ class PlaywrightMapScraper(BaseScraper):
             if height == previous_height:
                 break
             previous_height = height
-        return extract_map_items(await page.content(), self.profile, query, limit, "playwright")
+        items = extract_map_items(await page.content(), self.profile, query, limit, "playwright")
+        if not items:
+            final_text = (await page.locator("body").inner_text()).casefold()
+            if any(marker in final_text for marker in ("no reviews", "нет отзывов", "пікірлер жоқ")):
+                raise ScraperEmptyConfirmed(f"{self.source} page confirms there are no reviews")
+            raise RuntimeError(f"{self.source} page loaded, but review selectors found no items")
+        return items
 
     async def close(self) -> None:
         if self.context:

@@ -15,7 +15,8 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
-from app.scrapers.base import BaseScraper
+from app.scrapers.base import BaseScraper, ScraperEmptyConfirmed
+from app.scrapers.browser_runtime import BrowserRuntimeError
 from app.scrapers.maps_playwright import PROFILES, extract_map_items
 from app.scrapers.models import ScrapedItem
 from app.scrapers.storage import SupabaseRawReviewStore
@@ -31,6 +32,10 @@ class ProviderNotConfigured(ProviderError):
 
 class EmptyResult(ProviderError):
     pass
+
+
+class ConfirmedEmptyResult(ProviderError):
+    """The source loaded successfully and explicitly contains zero items."""
 
 
 class TransientProviderError(ProviderError):
@@ -127,20 +132,15 @@ class PlaywrightProvider(CollectorProvider):
         self.scraper_factory = scraper_factory
 
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
-        if os.getenv("VERCEL"):
-            raise ProviderNotConfigured("Playwright browser is unavailable on Vercel; continuing with the next provider")
         scraper = self.scraper_factory()
         try:
+            await scraper.connect()
             try:
-                await scraper.connect()
-            except Exception as exc:
-                message = str(exc)
-                if "Executable doesn't exist" in message or "playwright install" in message:
-                    raise ProviderNotConfigured(
-                        "Chromium is not installed. Run `python -m playwright install chromium` in the scraper worker."
-                    ) from exc
-                raise
-            return scraper.clean_data(await scraper.scrape(target_url, limit))
+                return scraper.clean_data(await scraper.scrape(target_url, limit))
+            except ScraperEmptyConfirmed as exc:
+                raise ConfirmedEmptyResult(str(exc)) from exc
+        except BrowserRuntimeError as exc:
+            raise ProviderError(f"{exc.code}: {exc}") from exc
         finally:
             await scraper.close()
 
@@ -532,6 +532,10 @@ class FallbackPipeline:
                         raise EmptyResult(f"{provider.name}: empty result")
                     normalized = list(unique.values())[:limit]
                     return normalized, provider.name, failures
+                except ConfirmedEmptyResult:
+                    # A verified zero is a successful collection. Calling a paid
+                    # fallback here would spend money for the same empty result.
+                    return [], provider.name, failures
                 except ProviderNotConfigured as exc:
                     failures.append({"provider": provider.name, "error": str(exc)})
                     break

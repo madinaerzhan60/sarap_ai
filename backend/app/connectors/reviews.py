@@ -285,10 +285,11 @@ class TwoGisPlaywrightConnector(BaseConnector):
             ],
         )
         scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=100)
-        if not scraped or not provider:
+        if not provider:
             detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)
             raise ConnectorUnavailable(f"2GIS collection failed through every configured method. {detail}")
         self.collection_method = provider
+        self.confirmed_empty = not scraped
         items = [RawItem(
             source=self.source,
             source_type=MentionType.review,
@@ -348,20 +349,21 @@ class InstagramFallbackConnector(BaseConnector):
                     ),
                 )
         providers = (
-            [SociaVaultInstagramProfileProvider(os.getenv("SOCIAVAULT_API_KEY")), apify, playwright]
+            [playwright, SociaVaultInstagramProfileProvider(os.getenv("SOCIAVAULT_API_KEY")), apify]
             if self.is_profile else [
+                playwright,
                 SociaVaultProvider(os.getenv("SOCIAVAULT_API_KEY")),
                 SocialCrawlProvider(os.getenv("SOCIALCRAWL_API_KEY")),
                 apify,
-                playwright,
             ]
         )
         pipeline = FallbackPipeline("instagram", providers)
         scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=500)
-        if not scraped or not provider:
+        if not provider:
             detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)
             raise ConnectorUnavailable(f"Instagram collection failed through every configured method. {detail}")
         self.collection_method = provider
+        self.confirmed_empty = not scraped
         items = [RawItem(
             source=self.source,
             source_type=MentionType.social_comment,
@@ -391,8 +393,6 @@ class ModularScraperConnector(BaseConnector):
         self.source_type = source_type
 
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
-        if os.getenv("VERCEL"):
-            raise ConnectorUnavailable("Playwright browser is unavailable in the Vercel runtime")
         scraper = self.scraper_factory()
         try:
             await scraper.connect()
@@ -452,10 +452,11 @@ class MapFallbackConnector(BaseConnector):
             ),
         ])
         scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=100)
-        if not scraped or not provider:
+        if not provider:
             detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)
             raise ConnectorUnavailable(f"{self.platform} collection failed through every configured method. {detail}")
         self.collection_method = provider
+        self.confirmed_empty = not scraped
         items = [RawItem(
             source=self.source,
             source_type=MentionType.review,

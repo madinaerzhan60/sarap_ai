@@ -6,9 +6,10 @@ import os
 from pathlib import Path
 
 from bs4 import BeautifulSoup
-from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
+from playwright.async_api import Browser, BrowserContext, Playwright, TimeoutError as PlaywrightTimeoutError
 
 from app.scrapers.base import BaseScraper, ScraperBlocked
+from app.scrapers.browser_runtime import BrowserRuntimeError, launch_chromium
 from app.scrapers.models import ScrapedItem
 from app.scrapers.proxy_pool import ProxyPool
 from app.scrapers.storage import SupabaseRawReviewStore
@@ -35,8 +36,7 @@ class SocialSessionScraper(BaseScraper):
 
     async def connect(self) -> None:
         proxy = await self.proxy_pool.next()
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=True, proxy=proxy.playwright() if proxy else None)
+        self.playwright, self.browser = await launch_chromium(proxy.playwright() if proxy else None)
         state = self.storage_state if self.storage_state and Path(self.storage_state).is_file() else None
         self.context = await self.browser.new_context(storage_state=state, locale="ru-KZ", viewport={"width": 1280, "height": 900})
 
@@ -44,7 +44,10 @@ class SocialSessionScraper(BaseScraper):
         if not self.context:
             raise RuntimeError("connect() must run before scrape()")
         page = await self.context.new_page()
-        await page.goto(query, wait_until="domcontentloaded", timeout=45_000)
+        try:
+            await page.goto(query, wait_until="domcontentloaded", timeout=45_000)
+        except PlaywrightTimeoutError as exc:
+            raise BrowserRuntimeError("navigation_timeout", f"{self.source} navigation timed out") from exc
         visible = (await page.locator("body").inner_text()).casefold()
         if any(value in visible for value in ("captcha", "verify you are human", "подтвердите, что вы не робот")):
             raise ScraperBlocked(f"{self.source} requested manual verification")

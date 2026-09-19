@@ -9,6 +9,10 @@ from app.scrapers.models import ScrapedItem, detect_language
 from app.scrapers.storage import SupabaseRawReviewStore
 
 
+class ScraperEmptyConfirmed(RuntimeError):
+    """The page loaded and explicitly confirmed that it has no items."""
+
+
 class ScraperBlocked(RuntimeError):
     """The source returned a login wall, CAPTCHA, robots denial or access block."""
 
