@@ -12,6 +12,7 @@ from app.scrapers.fallback import CollectorProvider, FallbackPipeline, normalize
 from app.scrapers.models import ScrapedItem
 import asyncio
 import pytest
+from app.services.telegram import business_from_token, connection_token
 
 
 def test_mixed_language_aspects_and_risk():
@@ -22,6 +23,14 @@ def test_mixed_language_aspects_and_risk():
     assert result.language == "mixed_kz_ru"
     assert {x.aspect for x in result.aspects} >= {"product", "staff"}
     assert risk.score >= 60
+
+
+def test_telegram_connection_token_is_signed(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "test-secret-that-is-long-enough-for-signing")
+    business_id = str(uuid4())
+    token = connection_token(business_id)
+    assert business_from_token(token) == business_id
+    assert business_from_token(token + "tampered") is None
 
 
 def test_hash_is_stable_after_whitespace_normalization():

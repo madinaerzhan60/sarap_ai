@@ -2,9 +2,30 @@ from __future__ import annotations
 
 import json
 import os
+import base64
+import hashlib
+import hmac
 from urllib.request import Request, urlopen
 
 from app.models import ProcessedMention
+
+
+def connection_token(business_id: str) -> str:
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if len(secret) < 24:
+        raise RuntimeError("TELEGRAM_WEBHOOK_SECRET is not configured")
+    signature = hmac.new(secret.encode(), business_id.encode(), hashlib.sha256).digest()[:16]
+    return f"{business_id}.{base64.urlsafe_b64encode(signature).decode().rstrip('=')}"
+
+
+def business_from_token(token: str) -> str | None:
+    business_id, separator, _ = token.partition(".")
+    if not separator:
+        return None
+    try:
+        return business_id if hmac.compare_digest(connection_token(business_id), token) else None
+    except RuntimeError:
+        return None
 
 
 def format_alert(item: ProcessedMention) -> str:

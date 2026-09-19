@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import hmac
 import json
 import os
 import re
@@ -10,7 +11,7 @@ from datetime import datetime, time, timezone
 from datetime import date, timedelta
 from uuid import UUID
 
-from fastapi import Body, Depends, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -25,7 +26,7 @@ from app.services.llm import analyze_with_cascade, generate_business_recommendat
 from app.services.normalization import normalize
 from app.services.review_extraction import ReviewExtractionUnavailable, extract_reviews, review_external_id
 from app.services.risk import calculate
-from app.services.telegram import send_alert
+from app.services.telegram import business_from_token, connection_token, send_alert
 from app.services.source_credentials import CredentialEncryptionError, SourceCredentialVault
 from app.security import AuthContext, require_admin_context, require_business_member, require_user
 from app.repository import RepositoryUnavailable, SourceAlreadyConnected, repository
@@ -74,8 +75,14 @@ async def process_item(business_id: UUID, item: RawItem) -> ProcessedMention:
         processed.append(result)
     if result.alert_created:
         try:
-            send_alert(result)
-        except OSError:
+            chat_id = None
+            if repository.configured:
+                rows = await repository.request("GET", "telegram_connections", params={"select": "encrypted_chat_id,enabled", "business_id": f"eq.{business_id}", "enabled": "eq.true", "limit": "1"})
+                if rows:
+                    chat_id = SourceCredentialVault().decrypt(rows[0]["encrypted_chat_id"], business_id=business_id, source_connection_id=business_id, provider="telegram").get("access_token")
+            if chat_id:
+                await asyncio.to_thread(send_alert, result, str(chat_id))
+        except (OSError, CredentialEncryptionError, RepositoryUnavailable):
             pass
     return result
 
@@ -103,6 +110,36 @@ def public_config() -> JSONResponse:
         },
         headers={"Cache-Control": "no-store"},
     )
+
+
+@app.post("/api/telegram/connect")
+async def telegram_connect(business_id: UUID, context: AuthContext = Depends(require_user)) -> dict:
+    await require_business_member(context, business_id)
+    username = os.getenv("TELEGRAM_BOT_USERNAME", "sarap_ai_bot").lstrip("@")
+    if not username:
+        raise HTTPException(503, "Telegram bot is not configured yet")
+    try:
+        token = connection_token(str(business_id))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {"url": f"https://t.me/{username}?start={token}"}
+
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(update: dict = Body(...), x_telegram_bot_api_secret_token: str | None = Header(default=None)) -> dict:
+    expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if not expected or not hmac.compare_digest(x_telegram_bot_api_secret_token or "", expected):
+        raise HTTPException(403, "Invalid Telegram webhook secret")
+    message = update.get("message") or {}
+    text = str(message.get("text") or "").strip()
+    chat_id = (message.get("chat") or {}).get("id")
+    token = text.split(maxsplit=1)[1] if text.startswith("/start ") else ""
+    business_id = business_from_token(token)
+    if not business_id or chat_id is None:
+        return {"ok": True, "connected": False}
+    encrypted = SourceCredentialVault().encrypt({"access_token": str(chat_id)}, business_id=business_id, source_connection_id=business_id, provider="telegram")
+    await repository.request("POST", "telegram_connections", params={"on_conflict": "business_id"}, json={"business_id": business_id, "encrypted_chat_id": encrypted, "enabled": True}, prefer="resolution=merge-duplicates")
+    return {"ok": True, "connected": True}
 
 
 @app.post("/api/mentions/ingest", response_model=ProcessedMention)

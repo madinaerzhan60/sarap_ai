@@ -216,7 +216,7 @@ class ReviewPageScraperConnector(BaseConnector):
                     robots = RobotFileParser(robots_url)
                     robots.parse(robots_response.text.splitlines())
                     if not robots.can_fetch(user_agent, self.page_url):
-                        raise ConnectorUnavailable("The source robots.txt does not allow this page to be collected")
+                        raise ConnectorUnavailable("This website blocks automatic collection. Use its official API or import reviews with Paste text / HTML.")
             try:
                 response = await _public_get(client, self.page_url)
                 response.raise_for_status()

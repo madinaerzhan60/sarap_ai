@@ -88,6 +88,10 @@ export async function restoreSession() {
   if (!session) return null;
   if (Number(session.expires_at || 0) < Math.floor(Date.now() / 1000) + 60) session = await refreshSession(session);
   if (!session) return null;
+  // Supabase already returns the verified user during sign-in. Reuse it until
+  // the token is close to expiry instead of making a /user request before
+  // every dashboard API call.
+  if (session.user?.id) return session;
   try {
     const user = await request(authUrl('/user'), { headers: { Authorization: `Bearer ${session.access_token}` } });
     session.user = user;
