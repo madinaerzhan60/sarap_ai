@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import hashlib
 import hmac
 import json
 import os
@@ -127,7 +128,8 @@ async def telegram_connect(business_id: UUID, context: AuthContext = Depends(req
 
 @app.post("/api/telegram/webhook")
 async def telegram_webhook(update: dict = Body(...), x_telegram_bot_api_secret_token: str | None = Header(default=None)) -> dict:
-    expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    configured_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    expected = hashlib.sha256(configured_secret.encode()).hexdigest() if configured_secret else ""
     if not expected or not hmac.compare_digest(x_telegram_bot_api_secret_token or "", expected):
         raise HTTPException(403, "Invalid Telegram webhook secret")
     message = update.get("message") or {}
