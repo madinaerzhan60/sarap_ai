@@ -259,23 +259,28 @@ class SociaVaultInstagramProfileProvider(CollectorProvider):
             return []
 
         maximum_posts = max(1, int(os.getenv("INSTAGRAM_PROFILE_POST_LIMIT", "5")))
+        profile_limit = min(limit, max(1, int(os.getenv("INSTAGRAM_PROFILE_COMMENT_LIMIT", "75"))))
+        per_post_limit = max(1, int(os.getenv("INSTAGRAM_COMMENTS_PER_POST_LIMIT", "15")))
         comments_provider = SociaVaultProvider(self.api_key)
         results: list[ScrapedItem] = []
         failures: list[str] = []
         for post_url in post_urls[:maximum_posts]:
             try:
-                comments = await comments_provider.collect(post_url, limit - len(results))
+                comments = await comments_provider.collect(
+                    post_url,
+                    min(per_post_limit, profile_limit - len(results)),
+                )
                 for item in comments:
                     item.metadata["profile_handle"] = handle
                     item.metadata["post_url"] = post_url
                 results.extend(comments)
             except ProviderError as exc:
                 failures.append(str(exc))
-            if len(results) >= limit:
+            if len(results) >= profile_limit:
                 break
         if not results and failures:
             raise ProviderError(f"sociavault: profile posts found, but comments could not be collected ({failures[0]})")
-        return results[:limit]
+        return results[:profile_limit]
 
 
 class SocialCrawlProvider(CollectorProvider):
