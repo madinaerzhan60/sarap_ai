@@ -158,8 +158,11 @@ class BrowserManager:
         except Exception as exc:
             await playwright.stop()
             message = str(exc)
+            log.exception("Playwright Chromium launch failed: %s", message)
             code = "chromium_not_installed" if "Executable doesn't exist" in message or "playwright install" in message else "browser_launch_failed"
-            raise BrowserRuntimeError(code, f"Playwright could not launch Chromium: {message.splitlines()[0]}") from exc
+            useful_lines = [line.strip() for line in message.splitlines() if line.strip()]
+            detail = " | ".join(useful_lines[:6])[:900]
+            raise BrowserRuntimeError(code, f"Playwright could not launch Chromium: {detail}") from exc
         log.info("playwright_configured=true chromium_found=true chromium_path_available=true browser_started=true")
         return playwright, browser
 

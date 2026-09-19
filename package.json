@@ -1,5 +1,5 @@
 {
   "dependencies": {
-    "@sparticuz/chromium": "^141.0.0"
+    "@sparticuz/chromium": "^140.0.0"
   }
 }
