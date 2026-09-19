@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
-import tarfile
-import tempfile
 from pathlib import Path
 from typing import Any
 
-import brotli
 from playwright.async_api import Browser, Playwright, async_playwright
 
 log = logging.getLogger("sarap.playwright")
@@ -37,18 +34,14 @@ def _is_serverless() -> bool:
 
 
 def _serverless_chromium() -> tuple[str, list[str]]:
-    """Extract the Lambda-compatible browser and return its recommended flags."""
-    package_bin = _project_root() / "node_modules" / "@sparticuz" / "chromium" / "bin"
-    executable = Path(tempfile.gettempdir()) / "chromium"
+    """Return Chromium and libraries prepared during the Vercel build."""
+    runtime = _project_root() / ".serverless-chromium"
+    executable = runtime / "chromium"
     try:
         if not executable.is_file():
-            _inflate_brotli(package_bin / "chromium.br", executable)
-            executable.chmod(0o700)
-        _inflate_tar_brotli(package_bin / "fonts.tar.br", Path(tempfile.gettempdir()) / "fonts")
-        _inflate_tar_brotli(package_bin / "swiftshader.tar.br", Path(tempfile.gettempdir()))
-        lambda_lib = Path(tempfile.gettempdir()) / "al2023" / "lib"
-        _inflate_tar_brotli(package_bin / "al2023.tar.br", lambda_lib.parent)
-        os.environ.setdefault("FONTCONFIG_PATH", str(Path(tempfile.gettempdir()) / "fonts"))
+            raise FileNotFoundError(executable)
+        lambda_lib = runtime / "al2023" / "lib"
+        os.environ.setdefault("FONTCONFIG_PATH", str(runtime / "fonts"))
         os.environ["LD_LIBRARY_PATH"] = ":".join(
             dict.fromkeys([str(lambda_lib), *os.getenv("LD_LIBRARY_PATH", "").split(":")])
         ).rstrip(":")
@@ -59,29 +52,6 @@ def _serverless_chromium() -> tuple[str, list[str]]:
             "chromium_not_installed",
             f"Serverless Chromium is unavailable: {detail}",
         ) from exc
-
-
-def _inflate_brotli(source: Path, destination: Path) -> None:
-    if not source.is_file():
-        raise FileNotFoundError(source)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    decoder = brotli.Decompressor()
-    with source.open("rb") as compressed, destination.open("wb") as output:
-        while chunk := compressed.read(4 * 1024 * 1024):
-            output.write(decoder.process(chunk))
-
-
-def _inflate_tar_brotli(source: Path, destination: Path) -> None:
-    marker = destination / f".{source.stem}.ready"
-    if marker.is_file():
-        return
-    archive = Path(tempfile.gettempdir()) / f"{source.stem}.tar"
-    _inflate_brotli(source, archive)
-    destination.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive) as bundle:
-        bundle.extractall(destination)
-    archive.unlink(missing_ok=True)
-    marker.touch()
 
 
 _SERVERLESS_CHROMIUM_ARGS = [

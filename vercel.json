@@ -1,10 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "mkdir -p public",
+  "buildCommand": "mkdir -p public && node scripts/build_serverless_chromium.cjs",
   "outputDirectory": "public",
   "functions": {
     "api/index.py": {
-      "includeFiles": "{frontend/**,node_modules/@sparticuz/chromium/bin/**}",
+      "includeFiles": "{frontend/**,.serverless-chromium/**}",
       "maxDuration": 60
     }
   },

@@ -9,6 +9,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 .playwright-browsers/
+.serverless-chromium/
 
 # Frontend and editor artifacts
 node_modules/
