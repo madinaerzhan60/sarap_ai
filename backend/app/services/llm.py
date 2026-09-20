@@ -145,4 +145,31 @@ Do not invent facts.\n\nMENTIONS:\n{text[:24000]}"""
             return {"score": max(0, min(10, float(result.get("score", 0)))), "summary": str(result.get("summary", "")), "recommendations": result.get("recommendations") or {"urgent_fix": [], "improve": [], "keep_doing": []}}
     except (httpx.HTTPError, KeyError, ValueError):
         pass
-    return {"score": 7.0, "summary": "Customers see value in the experience, with a few service improvements needed.", "recommendations": {"urgent_fix": [], "improve": [], "keep_doing": []}}
+    return {"score": 0.0, "summary": "No significant repeated recommendation yet.", "recommendations": {"urgent_fix": [], "improve": [], "keep_doing": []}}
+
+async def generate_reply_draft(text: str, sentiment: str, language: str, content_type: str, business_context: str = "") -> str:
+    """Generate an editable draft without inventing policies, promises or contact details."""
+    prompt = f"""Write one concise business reply draft to this customer {content_type}.
+Language: {language}. Sentiment: {sentiment}. Known context: {business_context or 'none'}.
+Acknowledge the exact message. Never invent refunds, policies, contact details, facts or promises.
+If it is a question and the answer is unknown, say the team needs to clarify it.
+Return plain reply text only.\n\nCUSTOMER MESSAGE:\n{text[:5000]}"""
+    if os.getenv("GROQ_API_KEY"):
+        try:
+            payload = {"model": os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b"), "temperature": .2, "messages": [{"role": "system", "content": "You write natural, safe customer service reply drafts."}, {"role": "user", "content": prompt}]}
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"}, json=payload)
+                response.raise_for_status()
+            draft = str(response.json()["choices"][0]["message"]["content"]).strip()
+            if draft:
+                return draft[:5000]
+        except (httpx.HTTPError, KeyError, ValueError):
+            pass
+    russian = language in {"ru", "mixed", "mixed_kz_ru"} or any("а" <= char.lower() <= "я" for char in text)
+    if content_type == "question":
+        return "Спасибо за вопрос. Нам нужно уточнить эту информацию у команды, чтобы ответить точно." if russian else "Thank you for the question. We need to confirm this with the team before giving you an exact answer."
+    if sentiment == "positive":
+        return "Спасибо за тёплый отзыв! Рады, что вам понравился опыт." if russian else "Thank you for the kind feedback! We are glad you enjoyed your experience."
+    if sentiment == "negative":
+        return "Спасибо, что рассказали об этом. Нам жаль, что ваш опыт оказался неудачным. Мы передадим описанную проблему команде для проверки." if russian else "Thank you for telling us. We are sorry your experience was disappointing. We will share the issue you described with the team for review."
+    return "Спасибо за обратную связь. Мы учтём ваше замечание." if russian else "Thank you for your feedback. We will take your comment into account."

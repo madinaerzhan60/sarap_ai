@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import csv
 import hashlib
+import io
 import hmac
 import json
 import os
@@ -23,8 +25,8 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 from app.connectors.reviews import ConnectorUnavailable, normalize_twogis_business_url
 from app.collectors.registry import collector_registry
 from app.connectors.search import DiscoveryService, fan_out
-from app.models import DiscoveryRequest, ExtractedReview, MentionType, ProcessedMention, RawItem, ReviewExtractionRequest, ReviewImportRequest, SourceCreate, SourceOAuthCredential, SourceUpdate
-from app.services.llm import analyze_with_cascade, generate_business_recommendations
+from app.models import DiscoveryRequest, ExtractedReview, ManualImportRequest, MentionType, MentionUpdate, ProcessedMention, RawItem, ReplyDraftRequest, ReplyStatus, ReviewExtractionRequest, ReviewImportRequest, RiskResult, SourceCreate, SourceOAuthCredential, SourceUpdate
+from app.services.llm import analyze_with_cascade, generate_business_recommendations, generate_reply_draft
 from app.services.normalization import normalize
 from app.services.review_extraction import ReviewExtractionUnavailable, extract_reviews, review_external_id
 from app.services.risk import calculate
@@ -69,8 +71,8 @@ async def process_item(business_id: UUID, item: RawItem) -> ProcessedMention:
         previous = next(x for x in processed if x.mention.content_hash == mention.content_hash)
         return previous.model_copy(update={"duplicate": True})
     analysis = await analyze_with_cascade(mention.text, mention.rating)
-    risk = calculate(mention, analysis)
-    result = ProcessedMention(mention=mention, analysis=analysis, risk=risk, alert_created=risk.score >= 60)
+    risk = calculate(mention, analysis) if mention.include_in_analysis else RiskResult(score=0, level="Excluded", reasons=["Excluded from customer reputation analysis"])
+    result = ProcessedMention(mention=mention, analysis=analysis, risk=risk, alert_created=mention.include_in_analysis and risk.score >= 60)
     if repository.configured:
         result = await repository.persist_processed(result, "groq-gemini-cascade")
     else:
@@ -173,6 +175,78 @@ async def list_mentions(business_id: UUID, context: AuthContext = Depends(requir
     return _visible_product_mentions([x for x in processed if x.mention.business_id == business_id])
 
 
+@app.patch("/api/mentions/{mention_id}", response_model=ProcessedMention)
+async def update_mention(mention_id: UUID, update: MentionUpdate, context: AuthContext = Depends(require_user)) -> ProcessedMention:
+    item = await repository.get_processed(str(mention_id)) if repository.configured else next((row for row in processed if row.mention.id == mention_id), None)
+    if not item:
+        raise HTTPException(404, "Mention not found")
+    await require_business_member(context, item.mention.business_id)
+    values = {key: (value.value if hasattr(value, "value") else value) for key, value in update.model_dump(exclude_none=True).items()}
+    if "reply_draft" in values and values["reply_draft"] != item.mention.reply_draft:
+        values.setdefault("reply_status", ReplyStatus.draft.value)
+    if repository.configured:
+        await repository.request("PATCH", "mentions", params={"id": f"eq.{mention_id}", "business_id": f"eq.{item.mention.business_id}"}, json=values)
+        updated = await repository.get_processed(str(mention_id))
+        if not updated:
+            raise HTTPException(404, "Mention not found")
+        return updated
+    item.mention = item.mention.model_copy(update=values)
+    return item
+
+
+@app.post("/api/mentions/{mention_id}/reply", response_model=ProcessedMention)
+async def create_reply_draft(mention_id: UUID, request: ReplyDraftRequest, context: AuthContext = Depends(require_user)) -> ProcessedMention:
+    item = await repository.get_processed(str(mention_id)) if repository.configured else next((row for row in processed if row.mention.id == mention_id), None)
+    if not item:
+        raise HTTPException(404, "Mention not found")
+    await require_business_member(context, item.mention.business_id)
+    if item.mention.reply_draft and not request.regenerate:
+        return item
+    draft = await generate_reply_draft(item.mention.text, item.analysis.sentiment, item.analysis.language, item.mention.content_type.value)
+    now = datetime.now(timezone.utc)
+    values = {"reply_draft": draft, "reply_generated_at": now.isoformat(), "reply_status": ReplyStatus.draft.value}
+    if repository.configured:
+        await repository.request("PATCH", "mentions", params={"id": f"eq.{mention_id}", "business_id": f"eq.{item.mention.business_id}"}, json=values)
+        updated = await repository.get_processed(str(mention_id))
+        if updated:
+            return updated
+    item.mention = item.mention.model_copy(update={"reply_draft": draft, "reply_generated_at": now, "reply_status": ReplyStatus.draft})
+    return item
+
+
+@app.post("/api/manual/import", response_model=list[ProcessedMention])
+async def manual_import(request: ManualImportRequest, context: AuthContext = Depends(require_user)) -> list[ProcessedMention]:
+    await require_business_member(context, request.business_id)
+    rows: list[dict[str, str]] = []
+    if request.csv_content:
+        reader = csv.DictReader(io.StringIO(request.csv_content))
+        if not reader.fieldnames or "text" not in {name.strip().lower() for name in reader.fieldnames}:
+            raise HTTPException(422, "CSV must contain a text column")
+        rows.extend({str(key).strip().lower(): str(value or "").strip() for key, value in row.items()} for row in reader)
+    if request.text and request.text.strip():
+        rows.append({"text": request.text.strip(), "source": "manual"})
+    if not rows:
+        raise HTTPException(422, "Paste feedback or upload a CSV file")
+    results: list[ProcessedMention] = []
+    for index, row in enumerate(rows[:500]):
+        text = row.get("text", "").strip()
+        if not text:
+            continue
+        rating = None
+        try:
+            rating = float(row["rating"]) if row.get("rating") else None
+        except ValueError:
+            pass
+        published_at = None
+        if row.get("published_at"):
+            try:
+                published_at = datetime.fromisoformat(row["published_at"].replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        results.append(await process_item(request.business_id, RawItem(source=row.get("source") or "manual", source_type=MentionType.review, external_id=f"manual-{hashlib.sha256(f'{index}|{text}'.encode()).hexdigest()}", external_url=row.get("url") or None, author_name=row.get("author") or None, text=text, rating=rating, published_at=published_at, metadata={"origin": "manual", "author_type": "customer"})))
+    return results
+
+
 def _period_bounds(days: int) -> tuple[date, date]:
     end = date.today()
     return end - timedelta(days=max(1, min(days, 365)) - 1), end
@@ -183,7 +257,7 @@ async def analytics(business_id: UUID, days: int = 30, context: AuthContext = De
     await require_business_member(context, business_id)
     mentions = _visible_product_mentions(await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id])
     start, end = _period_bounds(days)
-    rows = [item for item in mentions if item.mention.collected_at.date() >= start]
+    rows = [item for item in mentions if item.mention.include_in_analysis and item.mention.collected_at.date() >= start]
     counts = Counter(item.analysis.sentiment for item in rows)
     stop_words = {"this", "that", "with", "have", "very", "был", "это", "для", "что", "как", "және", "мен", "the", "and"}
     words = Counter(word.lower() for item in rows for word in re.findall(r"[\wӘәҒғҚқҢңӨөҰұҮүҺһІі]{4,}", item.mention.text) if word.lower() not in stop_words)
@@ -195,7 +269,7 @@ async def recommendations(business_id: UUID, days: int = 30, refresh: bool = Fal
     await require_business_member(context, business_id)
     start, end = _period_bounds(days)
     mentions = _visible_product_mentions(await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id])
-    rows = [item for item in mentions if item.mention.collected_at.date() >= start]
+    rows = [item for item in mentions if item.mention.include_in_analysis and item.mention.collected_at.date() >= start]
     if not rows:
         return {
             "business_id": str(business_id),
@@ -213,8 +287,16 @@ async def recommendations(business_id: UUID, days: int = 30, refresh: bool = Fal
                 return existing
         except RepositoryUnavailable:
             pass
-    source = "\n".join(f"{item.analysis.sentiment}: {item.analysis.summary or item.mention.text[:220]}" for item in rows[-50:])
+    source = "\n".join(f"{item.analysis.sentiment} | {', '.join(aspect.aspect for aspect in item.analysis.aspects)} | {item.analysis.summary or item.mention.text[:220]}" for item in rows[-50:])
     payload = await generate_business_recommendations(source)
+    aspect_sentiment = Counter((aspect.aspect, aspect.sentiment) for item in rows for aspect in item.analysis.aspects)
+    repeated_negative = [aspect for (aspect, sentiment), count in aspect_sentiment.most_common() if sentiment == "negative" and count >= 2]
+    repeated_positive = [aspect for (aspect, sentiment), count in aspect_sentiment.most_common() if sentiment == "positive" and count >= 2]
+    if not any(payload["recommendations"].values()):
+        payload["recommendations"]["improve"] = [f"Review repeated customer concerns about {aspect}" for aspect in repeated_negative[:3]]
+        payload["recommendations"]["keep_doing"] = [f"Maintain the customer experience around {aspect}" for aspect in repeated_positive[:3]]
+        if not repeated_negative and not repeated_positive:
+            payload["summary"] = "No significant repeated recommendation yet."
     result = {"business_id": str(business_id), "period_start": start.isoformat(), "period_end": end.isoformat(), "score": payload["score"], "summary": payload["summary"], "recommendations": payload["recommendations"], "generated_at": datetime.now(timezone.utc).isoformat()}
     if repository.configured:
         try:

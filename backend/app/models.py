@@ -32,6 +32,28 @@ class MentionType(StrEnum):
     video_comment = "video_comment"
 
 
+class ContentType(StrEnum):
+    review = "review"
+    comment = "comment"
+    question = "question"
+    post = "post"
+    news = "news"
+    other = "other"
+
+
+class AuthorType(StrEnum):
+    customer = "customer"
+    employee = "employee"
+    company = "company"
+    unknown = "unknown"
+
+
+class ReplyStatus(StrEnum):
+    none = "none"
+    draft = "draft"
+    answered = "answered"
+
+
 class RawItem(BaseModel):
     source: str
     source_type: MentionType = MentionType.review
@@ -51,6 +73,12 @@ class NormalizedMention(RawItem):
     language: str | None = None
     content_hash: str
     reviewed: bool = False
+    content_type: ContentType = ContentType.review
+    author_type: AuthorType = AuthorType.unknown
+    include_in_analysis: bool = True
+    reply_draft: str | None = None
+    reply_generated_at: datetime | None = None
+    reply_status: ReplyStatus = ReplyStatus.none
 
 
 class Aspect(BaseModel):
@@ -165,3 +193,20 @@ class ReviewExtractionRequest(BaseModel):
 class ReviewImportRequest(BaseModel):
     business_id: UUID
     reviews: list[ExtractedReview] = Field(min_length=1, max_length=200)
+
+
+class MentionUpdate(BaseModel):
+    author_type: AuthorType | None = None
+    include_in_analysis: bool | None = None
+    reply_draft: str | None = Field(default=None, max_length=5000)
+    reply_status: ReplyStatus | None = None
+
+
+class ReplyDraftRequest(BaseModel):
+    regenerate: bool = False
+
+
+class ManualImportRequest(BaseModel):
+    business_id: UUID
+    text: str | None = Field(default=None, max_length=120_000)
+    csv_content: str | None = Field(default=None, max_length=2_000_000)

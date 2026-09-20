@@ -182,7 +182,7 @@ function overviewAnalytics(){
   const data=state.analytics||{total:state.mentions.length,positive:state.mentions.filter(x=>x.sentiment==='positive').length,negative:state.mentions.filter(x=>x.sentiment==='negative').length,neutral:state.mentions.filter(x=>x.sentiment==='neutral'||x.sentiment==='mixed').length,top_keywords:[]};
   const total=data.total||0, positivePct=total?Math.round(data.positive/total*100):0, negativePct=total?Math.round(data.negative/total*100):0, score=Number(state.recommendations?.score||0), label=score<5?'Needs attention':score<8?'Good':'Excellent', recommendationGroups=state.recommendations?.recommendations||{};
   const keywordMax=Math.max(...(data.top_keywords||[]).map(x=>x.count),1);
-  return `<section class="overview-section"><div class="overview-section-head"><div><span class="section-label">Analytics</span><h2>Reputation analysis</h2><p>Live breakdown from the latest saved workspace data.</p></div></div><div class="grid content-split"><article class="card glass"><div class="card-head"><div><h2>Sentiment distribution</h2><p>${data.period_start||'Current'} to ${data.period_end||'now'}</p></div></div><div class="sentiment-donut" style="--positive:${positivePct}%;--negative:${positivePct+negativePct}%"><div><strong>${total}</strong><small>mentions</small></div></div><div class="legend"><span><i></i>Positive ${data.positive||0}</span><span><i class="neg"></i>Negative ${data.negative||0}</span><span>Neutral ${data.neutral||0}</span></div></article><article class="card glass"><div class="card-head"><div><h2>Top keywords</h2><p>Frequent words in the selected period</p></div></div>${(data.top_keywords||[]).map(item=>progressRow(item.word,item.count,keywordMax,'var(--emerald)')).join('')||'<p class="muted">Keywords will appear after reviews are collected.</p>'}</article></div><article class="card glass recommendations-card"><div class="card-head"><div><h2>AI business recommendations</h2><p>Generated from the latest analyzed mentions</p></div><div class="risk-score"><strong>${score.toFixed(1)}/10</strong><small>${label}</small></div></div><p class="summary">${escapeHtml(state.recommendations?.summary||'Refresh the AI analysis after collecting reviews.')}</p><div class="grid recommendation-grid">${[['urgent_fix','Urgent fix'],['improve','Improve'],['keep_doing','Keep doing']].map(([key,title])=>`<article class="recommendation-item"><h3>${title}</h3><ul>${(recommendationGroups[key]||[]).map(item=>`<li>${escapeHtml(item)}</li>`).join('')||'<li class="muted">No items yet.</li>'}</ul></article>`).join('')}</div></article></section>`;
+  return `<section class="overview-section"><div class="overview-section-head"><div><span class="section-label">Analytics</span><h2>Reputation analysis</h2><p>Live breakdown from the latest saved workspace data.</p></div></div><div class="grid content-split"><article class="card glass"><div class="card-head"><div><h2>Sentiment distribution</h2><p>${data.period_start||'Current'} to ${data.period_end||'now'}</p></div></div><div class="sentiment-donut" style="--positive:${positivePct}%;--negative:${positivePct+negativePct}%"><div><strong>${total}</strong><small>mentions</small></div></div><div class="legend"><span><i></i>Positive ${data.positive||0}</span><span><i class="neg"></i>Negative ${data.negative||0}</span><span>Neutral ${data.neutral||0}</span></div></article><article class="card glass"><div class="card-head"><div><h2>Top keywords</h2><p>Frequent words in the selected period</p></div></div>${(data.top_keywords||[]).map(item=>progressRow(item.word,item.count,keywordMax,'var(--emerald)')).join('')||'<p class="muted">Keywords will appear after reviews are collected.</p>'}</article></div><article class="card glass recommendations-card"><div class="card-head"><div><h2>AI business recommendations</h2><p>Generated from the latest analyzed mentions</p></div><div class="risk-score"><strong>${score.toFixed(1)}/10</strong><small>${label}</small></div></div><p class="summary">${escapeHtml(state.recommendations?.error?'Recommendations temporarily unavailable.':state.recommendations?.loading?'Loading recommendations...':state.recommendations?.summary||'No significant recommendation yet.')}</p><div class="grid recommendation-grid">${[['urgent_fix','Urgent fix'],['improve','Improve'],['keep_doing','Keep doing']].map(([key,title])=>`<article class="recommendation-item"><h3>${title}</h3><ul>${(recommendationGroups[key]||[]).map(item=>`<li>${escapeHtml(item)}</li>`).join('')||'<li class="muted">No items yet.</li>'}</ul></article>`).join('')}</div></article></section>`;
 }
 
 function overviewAlerts(){
@@ -228,28 +228,33 @@ function meaningfulMentionSummary(item){
   return copied?fallbackMentionSummary(item):summary;
 }
 function mentionTableRow(item){
-  const confidence=Math.max(0,Math.min(100,Math.round(Number(item.confidence||0)*100)));
-  const confidenceTone=confidence>=80?'high':confidence>=60?'medium':'low';
   const sentiment=String(item.sentiment||'neutral').toLowerCase();
-  const summary=meaningfulMentionSummary(item);
-  return `<tr data-mention-row="${item.id}">
-    <td class="review-cell"><strong title="${escapeHtml(item.text)}">${escapeHtml(item.text.slice(0,150))}${item.text.length>150?'…':''}</strong><small>${escapeHtml(item.source||'Unknown source')} · ${escapeHtml(item.author||'Unknown author')}</small></td>
+  const published=item.publishedAt?new Date(item.publishedAt).toLocaleDateString():'Unknown';
+  return `<tr data-mention-row="${item.id}" data-action="open-mention" data-id="${item.id}" tabindex="0">
+    <td class="review-cell"><strong>${escapeHtml(item.text.slice(0,120))}${item.text.length>120?'…':''}</strong><small>${escapeHtml(item.author||'Unknown author')}</small></td>
+    <td>${escapeHtml(item.source||'Unknown')}</td><td><span class="tag">${escapeHtml(item.contentType||item.type||'other')}</span></td>
     <td><span class="sentiment-pill ${sentiment}"><i></i>${escapeHtml(sentiment)}</span></td>
-    <td><div class="confidence-cell ${confidenceTone}"><div><strong>${confidence}%</strong><span>${confidenceTone==='high'?'High':confidenceTone==='medium'?'Medium':'Low'}</span></div><b><i style="width:${confidence}%"></i></b></div></td>
-    <td><p class="mention-summary">${escapeHtml(summary)}</p></td>
+    <td>${item.rating==null?'—':`${item.rating}/5`}</td><td><span class="risk-pill ${item.risk<30?'low':''}">${item.risk}</span></td><td>${escapeHtml(published)}</td>
   </tr>`;
 }
+const mentionFilters={source:'all',type:'all',sentiment:'all',author:'all',analysis:'all',reply:'all',date:'all',rating:'all',risk:'all',sort:'newest'};
+function filteredMentions(){
+  const cutoff=mentionFilters.date==='all'?null:Date.now()-Number(mentionFilters.date)*86400000;
+  const rows=state.mentions.filter(item=>(mentionFilters.source==='all'||item.source.toLowerCase().includes(mentionFilters.source))&&(mentionFilters.type==='all'||item.contentType===mentionFilters.type)&&(mentionFilters.sentiment==='all'||item.sentiment===mentionFilters.sentiment)&&(mentionFilters.author==='all'||item.authorType===mentionFilters.author)&&(mentionFilters.analysis==='all'||(mentionFilters.analysis==='included')===item.includeInAnalysis)&&(mentionFilters.reply==='all'||(mentionFilters.reply==='answered'?(item.replyStatus==='answered'):(item.replyStatus!=='answered'))&&(!cutoff||new Date(item.publishedAt||item.collectedAt).getTime()>=cutoff)&&(mentionFilters.rating==='all'||Number(item.rating)===Number(mentionFilters.rating))&&(mentionFilters.risk==='all'||(mentionFilters.risk==='high'?item.risk>=60:mentionFilters.risk==='medium'?item.risk>=30&&item.risk<60:item.risk<30)));
+  return rows.sort((a,b)=>mentionFilters.sort==='oldest'?new Date(a.publishedAt||a.collectedAt)-new Date(b.publishedAt||b.collectedAt):mentionFilters.sort==='risk'?b.risk-a.risk:mentionFilters.sort==='rating-low'?(a.rating??6)-(b.rating??6):mentionFilters.sort==='rating-high'?(b.rating??-1)-(a.rating??-1):new Date(b.publishedAt||b.collectedAt)-new Date(a.publishedAt||a.collectedAt));
+}
 function mentions(){
-  const all=state.mentions.filter(item=>mentionSentimentFilter==='all'||item.sentiment===mentionSentimentFilter);
-  const actions='<button class="btn btn-secondary" data-action="export-csv">Export CSV</button><button class="btn btn-secondary" data-action="extract-reviews">Paste text / HTML</button><button class="btn btn-primary" data-action="add-mention">+ Add mention</button>';
-  const pills=['all','positive','negative','neutral'].map(value=>`<button class="btn btn-quiet ${mentionSentimentFilter===value?'active':''}" data-sentiment-filter="${value}">${value[0].toUpperCase()+value.slice(1)}</button>`).join('');
-  return pageHead('Mentions','Every review, post, article and discussion in one normalized feed.',actions)+(all.length?`<div class="toolbar"><div class="nav-actions">${pills}</div><input class="search" id="mention-search" type="search" placeholder="Search text, source or author…"></div><div class="table-wrap mentions-table-wrap glass"><table class="mentions-table"><colgroup><col class="review-col"><col class="sentiment-col"><col class="confidence-col"><col class="summary-col"></colgroup><thead><tr><th>Review</th><th>Sentiment</th><th>Confidence</th><th>Summary</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No mentions collected','Paste copied page content or add one mention manually. SARAP will extract, normalize and analyze it.','extract-reviews','Paste text / HTML'));
+  const all=filteredMentions();
+  const actions='<button class="btn btn-secondary" data-action="export-csv">Export CSV</button><button class="btn btn-primary" data-action="manual-import">+ Manual import</button>';
+  const options=(values,current)=>values.map(([value,label])=>`<option value="${value}" ${current===value?'selected':''}>${label}</option>`).join('');
+  const filters=`<div class="mention-filters"><select class="filter" data-mention-filter="source">${options([['all','All sources'],['2gis','2GIS'],['google','Google'],['yandex','Yandex'],['youtube','YouTube'],['telegram','Telegram'],['instagram','Instagram'],['threads','Threads'],['linkedin','LinkedIn'],['manual','Manual']],mentionFilters.source)}</select><select class="filter" data-mention-filter="type">${options([['all','All types'],['review','Review'],['comment','Comment'],['question','Question'],['post','Post'],['news','News'],['other','Other']],mentionFilters.type)}</select><select class="filter" data-mention-filter="sentiment">${options([['all','All sentiment'],['positive','Positive'],['neutral','Neutral'],['negative','Negative']],mentionFilters.sentiment)}</select><select class="filter" data-mention-filter="author">${options([['all','All authors'],['customer','Customer'],['employee','Employee'],['company','Company'],['unknown','Unknown']],mentionFilters.author)}</select><select class="filter" data-mention-filter="analysis">${options([['all','Analysis: all'],['included','Included'],['excluded','Excluded']],mentionFilters.analysis)}</select><select class="filter" data-mention-filter="reply">${options([['all','Replies: all'],['answered','Answered'],['unanswered','Unanswered']],mentionFilters.reply)}</select><select class="filter" data-mention-filter="date">${options([['all','Any date'],['7','Last 7 days'],['30','Last 30 days'],['90','Last 90 days']],mentionFilters.date)}</select><select class="filter" data-mention-filter="rating">${options([['all','Any rating'],['1','1 star'],['2','2 stars'],['3','3 stars'],['4','4 stars'],['5','5 stars']],mentionFilters.rating)}</select><select class="filter" data-mention-filter="risk">${options([['all','Any risk'],['high','High risk'],['medium','Medium risk'],['low','Low risk']],mentionFilters.risk)}</select><select class="filter" data-mention-filter="sort">${options([['newest','Newest'],['oldest','Oldest'],['risk','Highest risk'],['rating-low','Lowest rating'],['rating-high','Highest rating']],mentionFilters.sort)}</select><input class="search" id="mention-search" type="search" placeholder="Search mentions…"></div>`;
+  return pageHead('Mentions','Customer feedback with original dates, classification and analysis status.',actions)+filters+(all.length?`<div class="table-wrap mentions-table-wrap glass"><table class="mentions-table"><thead><tr><th>Preview</th><th>Source</th><th>Type</th><th>Sentiment</th><th>Rating</th><th>Risk</th><th>Published date</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No matching mentions','Change the filters or import customer feedback.',null,null));
 }
 
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
 
 function sources() {
-  return pageHead('Sources','Connect pages and collect new public feedback.','<button class="btn btn-primary" data-action="connect-source">+ Add source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong>${escapeHtml(s.name)}</strong><small>${escapeHtml(s.method||s.kind)}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Items</span><strong>${s.items==null?'—':s.items}</strong></div><div><span>Last checked</span><strong>${escapeHtml(s.last)}</strong></div></div><div class="source-actions">${s.kind!=='Imported'?`<button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Sync</button>`:''}<button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button></div></article>`).join('')}</section>`:emptyState('No sources connected','Add a public page, connected account or manual import.','connect-source','Add source'));
+  return pageHead('Sources','Connect pages and collect new public feedback.','<button class="btn btn-primary" data-action="connect-source">+ Add source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong>${escapeHtml(s.name)}</strong><small>${escapeHtml(s.method||s.kind)}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Items</span><strong>${s.items==null?'—':s.items}</strong></div><div><span>Last checked</span><strong>${escapeHtml(s.last)}</strong></div></div><div class="source-actions">${s.kind!=='Imported'?`<button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Sync</button>`:'<button class="btn btn-secondary" data-action="manual-import">Import feedback</button>'}<button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button></div></article>`).join('')}</section>`:emptyState('No sources connected','Add a public page, connected account or manual import.','connect-source','Add source'));
 }
 
 function discover() {
@@ -392,7 +397,7 @@ function applyWorkspace(payload) {
   return Boolean(business.onboarding_completed);
 }
 
-function mapProcessed(row){const m=row.mention||{},a=row.analysis||{},r=row.risk||{};const item={id:m.id,source:m.source,type:m.source_type==='social_post'||m.source_type==='social_comment'?'social':m.source_type==='news_article'?'news':m.source_type||'review',author:m.author_name||'Unknown author',time:m.published_at?new Date(m.published_at).toLocaleString():new Date(m.collected_at).toLocaleString(),text:m.text||'',summary:a.summary||'',confidence:Number(a.confidence||0),rating:m.rating,language:a.language||m.language||'Unknown',sentiment:a.sentiment||'neutral',risk:r.score||0,aspects:(a.aspects||[]).map(x=>[x.aspect,x.sentiment==='positive'?'pos':x.sentiment==='negative'?'neg':'neutral']),reviewed:Boolean(m.reviewed)};if(!item.summary.trim())item.summary=fallbackMentionSummary(item);return item;}
+function mapProcessed(row){const m=row.mention||{},a=row.analysis||{},r=row.risk||{};const item={id:m.id,source:m.source,type:m.source_type||'review',contentType:m.content_type||'review',authorType:m.author_type||'unknown',includeInAnalysis:m.include_in_analysis!==false,author:m.author_name||'Unknown author',publishedAt:m.published_at||null,collectedAt:m.collected_at||null,time:m.published_at?new Date(m.published_at).toLocaleString():'Publication date unknown',url:m.external_url||'',text:m.text||'',summary:a.summary||'',confidence:Number(a.confidence||0),rating:m.rating,language:a.language||m.language||'Unknown',sentiment:a.sentiment||'neutral',risk:r.score||0,aspects:(a.aspects||[]).map(x=>[x.aspect,x.sentiment==='positive'?'pos':x.sentiment==='negative'?'neg':'neutral']),reviewed:Boolean(m.reviewed),replyDraft:m.reply_draft||'',replyGeneratedAt:m.reply_generated_at||null,replyStatus:m.reply_status||'none'};if(!item.summary.trim())item.summary=fallbackMentionSummary(item);return item;}
 async function loadProductData(){
   if(state.session?.demo||!state.business?.id)return;
   const headers=await apiAuthHeaders();
@@ -402,7 +407,7 @@ async function loadProductData(){
   try{mentionPayload=mentionText?JSON.parse(mentionText):null;}catch{throw new Error(mentionText.slice(0,240)||'Could not load mentions');}
   if(!mentionResponse.ok)throw new Error(mentionPayload?.detail||'Could not load mentions');
   state.mentions=(mentionPayload||[]).map(mapProcessed);
-  state.sources.forEach(source=>{source.items=state.mentions.filter(item=>item.source.toLowerCase()===source.name.toLowerCase()).length;});
+  state.sources.forEach(source=>{source.items=state.mentions.filter(item=>item.source.toLowerCase()===source.name.toLowerCase()||(source.name==='Manual import'&&item.source.toLowerCase()==='manual')).length;});
   const [alerts,discoveries,settings]=await Promise.all([
     db(`/alerts?business_id=eq.${state.business.id}&select=*&order=created_at.desc`),
     db(`/web_discoveries?business_id=eq.${state.business.id}&select=*&order=discovered_at.desc`),
@@ -415,18 +420,16 @@ async function loadProductData(){
 }
 async function loadAnalyticsData(refresh=false){
   if(state.session?.demo||!state.business?.id)return;
+  state.recommendations={...(state.recommendations||{}),loading:true,error:false};if(state.route==='overview')render();
   try{
     const headers=await apiAuthHeaders();
-    const [analyticsResponse,recommendationResponse]=await Promise.all([
-      fetch(apiPath(`/api/analytics?business_id=${encodeURIComponent(state.business.id)}&days=30`),{headers}),
-      fetch(apiPath(`/api/recommendations?business_id=${encodeURIComponent(state.business.id)}&days=30${refresh?'&refresh=true':''}`),{headers}),
-    ]);
-    if(!analyticsResponse.ok||!recommendationResponse.ok)throw new Error('Could not load analytics');
+    const analyticsResponse=await fetch(apiPath(`/api/analytics?business_id=${encodeURIComponent(state.business.id)}&days=30`),{headers});
+    if(!analyticsResponse.ok)throw new Error('Could not load analytics');
     state.analytics=await analyticsResponse.json();
-    state.recommendations=await recommendationResponse.json();
-    saveState();
-    if(state.route==='overview')render();
-  }catch(error){toast('Analytics unavailable',error.message);}
+    const recommendationResponse=await fetch(apiPath(`/api/recommendations?business_id=${encodeURIComponent(state.business.id)}&days=30${refresh?'&refresh=true':''}`),{headers});
+    if(!recommendationResponse.ok)throw new Error('Recommendations temporarily unavailable');
+    state.recommendations={...(await recommendationResponse.json()),loading:false,error:false};saveState();if(state.route==='overview')render();
+  }catch(error){state.recommendations={...(state.recommendations||{}),loading:false,error:true};saveState();if(state.route==='overview')render();toast('Recommendations unavailable','Please try again later.');}
 }
 async function loadAdminData(){if(state.session?.role!=='admin')return;try{const response=await fetch(apiPath('/api/admin/overview'),{headers:await apiAuthHeaders()});if(!response.ok)throw new Error((await response.json()).detail||'Could not load admin data');state.admin=await response.json();saveState();render();}catch(error){toast('Admin data unavailable',error.message);}}
 
@@ -503,11 +506,19 @@ async function onboardingSubmit(form) {
   saveState();render();
 }
 
-function smartReply(id) {
-  const mention=[...state.mentions,...state.discoveries].find(m=>m.id===id); if(!mention)return;
-  const critical=mention.risk>=80||/(отрав|fraud|мошен|injur|дискрим|қауіп)/i.test(mention.text);
-  const reply=critical?'Human review recommended. This topic may involve safety, legal or reputational risk; SARAP will not suggest a promotional response.':mention.language.includes('Kazakh')||mention.language.includes('Mixed')?'Пікіріңізге рақмет. Күткеніңізден ұзақ қызмет көрсетілгені үшін кешірім сұраймыз. Бұл жағдайды командамен тексеріп, қызмет көрсету сапасын жақсартамыз.':'Спасибо за обратную связь. Нам жаль, что ожидание и обслуживание вас разочаровали. Мы разберём ситуацию с командой и улучшим процесс.';
-  modal(`<div class="modal-head"><div><h2>${critical?'Human review':'Smart Reply'}</h2><p>SARAP matched the response language and business tone.</p></div><button class="close" data-action="close-modal">×</button></div><div class="summary">${escapeHtml(reply)}</div><p class="form-note">Not sent automatically — review before use.</p><div class="form-actions"><button class="btn btn-secondary" data-action="regenerate-reply" data-id="${id}">Regenerate</button><button class="btn btn-primary" data-action="copy-reply" data-text="${escapeHtml(reply)}">Copy reply</button></div>`);
+function mentionDetailModal(mention){
+  const published=mention.publishedAt?new Date(mention.publishedAt).toLocaleString():'Unknown';
+  const collected=mention.collectedAt?new Date(mention.collectedAt).toLocaleString():'Unknown';
+  modal(`<div class="modal-head"><div><h2>${escapeHtml(mention.contentType||'Mention')}</h2><p>${escapeHtml(mention.source)} · Published ${escapeHtml(published)}</p></div><button class="close" data-action="close-modal">×</button></div><div class="mention-detail-text">${escapeHtml(mention.text)}</div><div class="detail-grid"><div><span>Author</span><strong>${escapeHtml(mention.author)}</strong></div><div><span>Author type</span><strong>${escapeHtml(mention.authorType)}</strong></div><div><span>Collected</span><strong>${escapeHtml(collected)}</strong></div><div><span>Rating</span><strong>${mention.rating??'—'}</strong></div><div><span>Sentiment</span><strong>${escapeHtml(mention.sentiment)}</strong></div><div><span>Risk</span><strong>${mention.risk}</strong></div></div>${mention.url?`<p class="form-note"><a href="${escapeHtml(mention.url)}" target="_blank" rel="noopener">Open original source ↗</a></p>`:''}<div class="tags">${mention.aspects.map(([a,t])=>`<span class="tag ${t}">${escapeHtml(a)}</span>`).join('')}</div>${mention.replyDraft?`<div class="summary"><strong>Reply draft</strong><br>${escapeHtml(mention.replyDraft)}</div>`:''}<form data-form="mention-update" data-mention-id="${mention.id}"><div class="field-grid"><div class="field"><label>Author type</label><select name="authorType">${['customer','employee','company','unknown'].map(x=>`<option ${mention.authorType===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Analysis</label><select name="analysis"><option value="included" ${mention.includeInAnalysis?'selected':''}>Included</option><option value="excluded" ${!mention.includeInAnalysis?'selected':''}>Excluded</option></select></div></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="reply" data-id="${mention.id}">Generate reply</button><button class="btn btn-primary">Save</button></div></form>`);
+}
+async function smartReply(id,regenerate=false) {
+  let mention=state.mentions.find(m=>m.id===id);if(!mention)return;
+  if(!state.session?.demo){
+    const response=await fetch(apiPath(`/api/mentions/${encodeURIComponent(id)}/reply`),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({regenerate})});
+    const body=await response.json();if(!response.ok)throw new Error(body.detail||'Reply is temporarily unavailable');
+    mention=mapProcessed(body);state.mentions=state.mentions.map(item=>item.id===id?mention:item);saveState();
+  }else if(!mention.replyDraft||regenerate){mention.replyDraft=mention.sentiment==='positive'?'Спасибо за тёплый отзыв! Рады, что вам понравился опыт.':'Спасибо за обратную связь. Нам жаль, что ваш опыт оказался неудачным. Мы передадим описанную проблему команде для проверки.';mention.replyStatus='draft';}
+  closeModal();modal(`<div class="modal-head"><div><h2>Reply draft</h2><p>Edit before copying. SARAP never publishes automatically.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="reply-draft" data-mention-id="${id}"><div class="field"><label>Editable reply</label><textarea name="replyDraft" class="reply-editor">${escapeHtml(mention.replyDraft)}</textarea></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="regenerate-reply" data-id="${id}">Regenerate</button><button type="button" class="btn btn-secondary" data-action="copy-reply" data-text="${escapeHtml(mention.replyDraft)}">Copy</button><button type="button" class="btn btn-secondary" data-action="mark-answered" data-id="${id}">Mark answered</button><button class="btn btn-primary">Save draft</button></div></form>`);
 }
 
 function editSourceModal(source){
@@ -552,6 +563,10 @@ function providerSearchUrl(provider,query,city){
   if(provider==='YouTube')return `https://www.youtube.com/results?search_query=${encoded}`;
   return `https://www.google.com/search?q=${encoded}`;
 }
+function manualImportModal(){
+  modal(`<div class="modal-head"><div><h2>Manual import</h2><p>Paste one customer message or upload a CSV with a text column.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="manual-import"><div class="field"><label>Paste customer feedback</label><textarea name="text" placeholder="Очень плохое обслуживание..."></textarea></div><div class="field"><label>Upload CSV <span class="muted">text required; author, rating, published_at, source and url optional</span></label><input name="csvFile" type="file" accept=".csv,text/csv"></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button><button class="btn btn-primary">Import and analyze</button></div></form>`);
+}
+
 function addMentionModal() {
   modal(`<div class="modal-head"><div><h2>Add a demo mention</h2><p>Runs normalization, deduplication, aspect analysis and risk scoring.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="mention"><div class="field-grid"><div class="field"><label>Source</label><select name="source"><option>2GIS</option><option>Google</option><option>Instagram</option><option>Web</option></select></div><div class="field"><label>Rating</label><input name="rating" type="number" min="1" max="5" value="2"></div></div><div class="field"><label>Customer feedback</label><textarea name="text" required placeholder="Кофе күшті, бірақ сервис өте баяу..."></textarea></div><div class="form-actions"><span></span><button class="btn btn-primary">Analyze mention</button></div></form>`);
 }
@@ -601,10 +616,11 @@ document.addEventListener('click', async e => {
   if(action==='onboarding-back'){state.onboardingStep=Math.max(1,state.onboardingStep-1);saveState();render();}
   if(action==='review'){const m=[...state.mentions,...state.discoveries].find(x=>x.id===target.dataset.id);m.reviewed=!m.reviewed;if(!state.session?.demo&&state.mentions.includes(m))await db(`/mentions?id=eq.${m.id}`,{method:'PATCH',body:{reviewed:m.reviewed,reviewed_at:m.reviewed?new Date().toISOString():null}});saveState();render();toast('Mention updated',m.reviewed?'Marked as reviewed.':'Returned to review queue.');}
   if(action==='escalate'){toast('Escalated','The mention was added to the team review queue.');}
-  if(action==='reply')smartReply(target.dataset.id);
+  if(action==='open-mention'){const mention=state.mentions.find(item=>item.id===target.dataset.id);if(mention)mentionDetailModal(mention);}
+  if(action==='reply'){try{await smartReply(target.dataset.id);}catch(error){toast('Reply unavailable',friendlyError(error));}}
   if(action==='close-modal')closeModal();
   if(action==='copy-reply'){await navigator.clipboard?.writeText(target.dataset.text);toast('Copied','Review the response before sending.');closeModal();}
-  if(action==='regenerate-reply'){closeModal();smartReply(target.dataset.id);toast('Reply regenerated','A fresh draft is ready to review.');}
+  if(action==='regenerate-reply'){try{await smartReply(target.dataset.id,true);toast('Reply regenerated','A fresh draft is ready to edit.');}catch(error){toast('Reply unavailable',friendlyError(error));}}
   if(action==='connect-source'||action==='onboarding-add-source')addSourceModal();
   if(action==='connect-telegram'){
     target.disabled=true;
@@ -633,6 +649,8 @@ document.addEventListener('click', async e => {
     try{await pollBackendSource(source);}catch(error){source.errors+=1;source.status='Needs attention';source.state='high';saveState();render();toast('Collection unavailable',error.message);}finally{clearInterval(timer);}
   }
   if(action==='add-mention')addMentionModal();
+  if(action==='manual-import')manualImportModal();
+  if(action==='mark-answered'){try{const response=await fetch(apiPath(`/api/mentions/${encodeURIComponent(target.dataset.id)}`),{method:'PATCH',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({reply_status:'answered'})});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Update failed');state.mentions=state.mentions.map(item=>item.id===target.dataset.id?mapProcessed(body):item);closeModal();render();toast('Marked answered','SARAP recorded the reply status.');}catch(error){toast('Could not update reply',friendlyError(error));}}
   if(action==='extract-reviews'){closeModal();reviewExtractionModal(target.dataset.platform||'');}
   if(action==='import-extracted'){
     const selected=[...document.querySelectorAll('[data-extracted-index]:checked')].map(x=>pendingExtractedReviews[Number(x.dataset.extractedIndex)]).filter(Boolean);
@@ -719,6 +737,21 @@ document.addEventListener('submit', async e => {
       closeModal();saveState();render();toast('Source updated','Collection state was reset. Test collection again.');
     }catch(error){toast('Could not update source',error.message);}
   }
+  if(kind==='manual-import'){
+    const data=new FormData(form), file=data.get('csvFile'), text=String(data.get('text')||'').trim();let csvContent='';
+    if(file instanceof File&&file.size)csvContent=await file.text();
+    if(!text&&!csvContent){toast('Feedback required','Paste feedback or choose a CSV file.');return;}
+    form.classList.add('loading');
+    try{const response=await fetch(apiPath('/api/manual/import'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({business_id:state.business.id,text:text||null,csv_content:csvContent||null})});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Import failed');closeModal();await loadProductData();await loadAnalyticsData(true);render();toast('Import complete',`${body.filter(item=>!item.duplicate).length} new item(s) analyzed.`);}catch(error){form.classList.remove('loading');toast('Could not import',friendlyError(error));}
+  }
+  if(kind==='mention-update'){
+    const d=fieldData(form),id=form.dataset.mentionId;
+    try{const response=await fetch(apiPath(`/api/mentions/${encodeURIComponent(id)}`),{method:'PATCH',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({author_type:d.authorType,include_in_analysis:d.analysis==='included'})});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Update failed');state.mentions=state.mentions.map(item=>item.id===id?mapProcessed(body):item);closeModal();await loadAnalyticsData(true);render();toast('Mention updated','Analytics were refreshed.');}catch(error){toast('Could not update mention',friendlyError(error));}
+  }
+  if(kind==='reply-draft'){
+    const d=fieldData(form),id=form.dataset.mentionId;
+    try{const response=await fetch(apiPath(`/api/mentions/${encodeURIComponent(id)}`),{method:'PATCH',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({reply_draft:d.replyDraft,reply_status:'draft'})});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Save failed');state.mentions=state.mentions.map(item=>item.id===id?mapProcessed(body):item);closeModal();render();toast('Draft saved','The reply remains editable and was not published.');}catch(error){toast('Could not save reply',friendlyError(error));}
+  }
   if(kind==='mention'){const d=fieldData(form);const normalized=d.text.trim().replace(/\s+/g,' ');if(state.mentions.some(m=>m.text.toLowerCase()===normalized.toLowerCase())){toast('Duplicate ignored','The normalized content already exists.');return;}if(state.session?.demo){const ai=analyzeDemo(normalized,d.rating);const m={id:crypto.randomUUID(),source:d.source,type:'review',author:'Manual demo entry',time:'Just now',text:normalized,rating:Number(d.rating),reviewed:false,...ai};state.mentions.unshift(m);if(m.risk>=60)state.alerts.unshift({id:crypto.randomUUID(),severity:m.risk>=80?'Critical':'High',source:m.source,time:'Just now',aspect:m.aspects.find(a=>a[1]==='neg')?.[0]||'Overall',risk:m.risk,text:m.text,status:'New'});}else{const response=await fetch(apiPath(`/api/mentions/ingest?business_id=${encodeURIComponent(state.business.id)}`),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({source:d.source,source_type:'review',external_id:`manual-${crypto.randomUUID()}`,author_name:'Manual entry',text:normalized,rating:Number(d.rating),metadata:{origin:'manual'}})});if(!response.ok){toast('Could not analyze mention',(await response.json()).detail||'Request failed');return;}await loadProductData();}saveState();closeModal();render();toast('Mention analyzed','The mention, AI analysis and risk score were saved.');}
   if(kind==='settings'){const d=fieldData(form);if(['Business','Business profile'].includes(currentSettingsTab))Object.assign(state.business,{name:d.name,industry:d.industry,country:d.country,city:d.city,aliases:d.aliases.split('\n').map(x=>x.trim()).filter(Boolean)});if(currentSettingsTab==='Alerts')state.settings.threshold=d.threshold;if(currentSettingsTab==='AI')Object.assign(state.settings,{tone:d.tone,customAspects:d.customAspects});if(currentSettingsTab==='Account'&&d.fullName)state.session.name=d.fullName.trim();if(!state.session?.demo){try{if(['Business','Business profile'].includes(currentSettingsTab))await completeWorkspace(state.business);if(currentSettingsTab==='Account')await db(`/profiles?id=eq.${encodeURIComponent(state.accountUserId)}`,{method:'PATCH',body:{full_name:state.session.name,updated_at:new Date().toISOString()}});if(['Alerts','AI'].includes(currentSettingsTab))await db('/workspace_settings?on_conflict=business_id',{method:'POST',prefer:'resolution=merge-duplicates',body:{business_id:state.business.id,alert_threshold:state.settings.threshold==='Critical only'?80:state.settings.threshold==='All negative'?30:60,reply_tone:state.settings.tone,custom_aspects:state.settings.customAspects,telegram_alerts:true}});}catch(error){toast('Could not save settings',error.message);return;}}saveState();render();toast('Settings saved',state.session?.demo?'Saved in this browser.':'Saved to your SARAP workspace.');}
 });
@@ -730,6 +763,7 @@ function filterMentions() {
 document.addEventListener('input',e=>{if(e.target.id==='mention-search'){const query=e.target.value.toLowerCase();document.querySelectorAll('[data-mention-row]').forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(query)));}if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();});
 document.addEventListener('change',e=>{
   if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();
+  if(e.target.matches('[data-mention-filter]')){mentionFilters[e.target.dataset.mentionFilter]=e.target.value;render();}
   if(e.target.matches('[data-source-select]')){
     const form=e.target.closest('form'), name=e.target.value, url=form?.querySelector('[name="url"]'), hint=form?.querySelector('[data-source-hint]'), method=form?.querySelector('[name="method"]');
     if(url){url.placeholder=sourcePlaceholder(name);url.required=!['Google Business','Manual import'].includes(name);}

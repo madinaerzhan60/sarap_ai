@@ -89,6 +89,10 @@ class SupabaseRepository:
                 "rating": m.rating, "published_at": m.published_at.isoformat() if m.published_at else None,
                 "collected_at": m.collected_at.isoformat(), "language": result.analysis.language,
                 "content_hash": m.content_hash, "metadata": m.metadata,
+                "content_type": m.content_type.value, "author_type": m.author_type.value,
+                "include_in_analysis": m.include_in_analysis, "reply_draft": m.reply_draft,
+                "reply_generated_at": m.reply_generated_at.isoformat() if m.reply_generated_at else None,
+                "reply_status": m.reply_status.value,
             }, prefer="return=representation")
             mention_id = mention_rows[0]["id"]
         analysis_payload = {

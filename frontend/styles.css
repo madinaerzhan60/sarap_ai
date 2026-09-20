@@ -322,3 +322,10 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
 .source-actions { display:flex; justify-content:flex-end; gap:5px; margin-top:11px; padding-top:10px; border-top:1px solid var(--line); }
 .source-actions .btn { padding:8px 10px; }
 @media (max-width:760px){.source-grid,.onboarding-source-actions{grid-template-columns:1fr}}
+
+/* Mention intelligence table */
+.mention-filters{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px}.mention-filters .search{margin-left:auto}
+.mentions-table{min-width:1040px;table-layout:auto}.mentions-table tbody tr{cursor:pointer}.mentions-table td:first-child{min-width:330px}.mentions-table td{font-size:11px}
+.mention-detail-text{padding:15px;margin-bottom:14px;border-radius:12px;background:rgba(255,255,255,.55);font-size:13px;line-height:1.6}
+.detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}.detail-grid>div{padding:10px;border-radius:10px;background:rgba(255,255,255,.45)}.detail-grid span,.detail-grid strong{display:block}.detail-grid span{color:var(--muted);font-size:9px}.detail-grid strong{margin-top:3px;font-size:11px}.reply-editor{min-height:180px!important}
+@media(max-width:760px){.detail-grid{grid-template-columns:1fr 1fr}.mention-filters .filter{flex:1 1 44%}}

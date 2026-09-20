@@ -516,3 +516,33 @@ def test_discovery_queries_include_social_sites():
     queries = fan_out("SDU University", ["SDU", "СДУ"], "Almaty")
     assert '"SDU University" site:linkedin.com' in queries
     assert '"СДУ" site:threads.net' in queries
+
+
+def test_content_and_author_classification_defaults():
+    from app.models import AuthorType, ContentType
+    mention = normalize(RawItem(source="2gis", external_id="classify-1", text="Хороший университет", rating=5), uuid4())
+    assert mention.content_type == ContentType.review
+    assert mention.author_type == AuthorType.customer
+    assert mention.include_in_analysis is True
+
+
+def test_company_and_employee_content_is_excluded_from_analysis():
+    from app.models import AuthorType
+    company = normalize(RawItem(source="Instagram", source_type="social_comment", external_id="company-1", text="Спасибо за отзыв", metadata={"official_account": True}), uuid4())
+    employee = normalize(RawItem(source="LinkedIn", source_type="social_post", external_id="employee-1", text="Приходите к нам", metadata={"is_employee": True}), uuid4())
+    assert (company.author_type, company.include_in_analysis) == (AuthorType.company, False)
+    assert (employee.author_type, employee.include_in_analysis) == (AuthorType.employee, False)
+
+
+def test_question_content_type_is_detected():
+    from app.models import ContentType
+    mention = normalize(RawItem(source="YouTube", source_type="video_comment", external_id="question-1", text="Когда откроется новый корпус?"), uuid4())
+    assert mention.content_type == ContentType.question
+
+
+def test_reply_fallback_does_not_invent_unknown_answer(monkeypatch):
+    from app.services.llm import generate_reply_draft
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    reply = asyncio.run(generate_reply_draft("Когда откроется новый корпус?", "neutral", "ru", "question"))
+    assert "уточнить" in reply
+    assert "откроется" not in reply
