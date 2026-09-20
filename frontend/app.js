@@ -41,6 +41,21 @@ const icons = {
 
 const logo = () => `<span class="brand" aria-label="sarap"><span class="brand-word">sarap<span>.</span></span></span>`;
 
+const INDUSTRIES = ['Restaurants & cafés','Retail','Education','Healthcare','Hospitality','Services','Other'];
+
+function deterministicAliases(name='') {
+  const clean=String(name).trim().replace(/\s+/g,' ');
+  if(!clean)return [];
+  const parts=clean.split(' ').filter(word=>!['university','college','school','company','restaurant','cafe','café','hotel','clinic','shop'].includes(word.toLowerCase()));
+  const acronym=(parts.length>1?parts:clean.split(' ')).map(word=>word[0]).join('').toUpperCase();
+  const aliases=[clean];
+  if(acronym.length>=2)aliases.push(acronym);
+  if(/^SDU(?: University)?$/i.test(clean))aliases.push('SDU University','Suleyman Demirel University','СДУ','Сулейман Демирель университеті','Сулейман Демирель университет');
+  const transliterated=clean.toLowerCase().replace(/[аә]/g,'a').replace(/[б]/g,'b').replace(/[в]/g,'v').replace(/[гғ]/g,'g').replace(/[д]/g,'d').replace(/[её]/g,'e').replace(/[ж]/g,'zh').replace(/[з]/g,'z').replace(/[иі]/g,'i').replace(/[й]/g,'y').replace(/[кқ]/g,'k').replace(/[л]/g,'l').replace(/[м]/g,'m').replace(/[нң]/g,'n').replace(/[оө]/g,'o').replace(/[п]/g,'p').replace(/[р]/g,'r').replace(/[с]/g,'s').replace(/[т]/g,'t').replace(/[уұү]/g,'u').replace(/[ф]/g,'f').replace(/[хһ]/g,'h').replace(/[ц]/g,'ts').replace(/[ч]/g,'ch').replace(/[шщ]/g,'sh').replace(/[ы]/g,'y').replace(/[э]/g,'e').replace(/[ю]/g,'yu').replace(/[я]/g,'ya').replace(/[ьъ]/g,'');
+  if(transliterated!==clean.toLowerCase())aliases.push(transliterated);
+  return [...new Set(aliases.map(value=>value.trim()).filter(Boolean))];
+}
+
 const demoMentions = [
   { id:'m3', source:'2GIS', type:'review', author:'Aigerim K.', time:'Yesterday', text:'Заказ ждала 40 минут. Персонал даже не объяснил причину, больше не приду.', sentiment:'negative', language:'Russian', risk:76, aspects:[['Wait time','neg'],['Staff','neg']], rating:1, reviewed:false },
 ];
@@ -79,7 +94,7 @@ const defaultState = {
 const emptyBusiness = {id:null,name:'',website:'',industry:'',country:'Kazakhstan',city:'',locations:1,aliases:[],handle:''};
 
 let state = loadState();
-let currentSettingsTab = 'Business';
+let currentSettingsTab = 'Business profile';
 let authReady = false;
 let pendingExtractedReviews = [];
 
@@ -97,6 +112,15 @@ function toast(title, detail='') {
   if(/failed to fetch|networkerror|load failed/i.test(String(detail)))detail='Could not reach SARAP API. Check the server connection and try again.';
   const el = document.createElement('div'); el.className='toast'; el.innerHTML=`<strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small>`;
   document.querySelector('#toast-region').append(el); setTimeout(()=>el.remove(), 3800);
+}
+function friendlyError(error) {
+  const message=String(error?.message||error||'').trim();
+  if(/failed to fetch|networkerror|load failed|api is unavailable/i.test(message))return 'SARAP could not reach the server. Try again in a moment.';
+  if(/already|duplicate|unique/i.test(message))return 'This source is already connected.';
+  if(/401|403|unauthor|forbidden|token|credential/i.test(message))return 'This connection needs valid access in Source settings → Advanced integration.';
+  if(/captcha|verification|robots\.txt|blocked|not allow/i.test(message))return 'The website blocked automatic collection. Try Sync later or connect an advanced integration.';
+  if(/timeout|timed out/i.test(message))return 'The source took too long to respond. Try again.';
+  return message||'Something went wrong. Check the details and try again.';
 }
 function setRoute(route) { state.route=['analytics','alerts'].includes(route)?'overview':route; if(location.protocol!=='file:')history.replaceState(null,'',state.route==='admin'?'/admin':'/'); saveState(); render(); window.scrollTo(0,0); if(state.route==='admin')loadAdminData(); if(state.route==='overview')loadAnalyticsData(); }
 function initials(name='SARAP User') { return name.split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase(); }
@@ -125,8 +149,13 @@ function resetPassword() {
 
 function onboarding() {
   const step=state.onboardingStep;
-  const stepFields = step===1 ? `<div class="field-grid"><div class="field"><label>Business name</label><input name="name" required value="${escapeHtml(state.business.name)}"></div><div class="field"><label>Website</label><input name="website" value="${escapeHtml(state.business.website)}"></div><div class="field"><label>Industry</label><select name="industry"><option>Restaurants & cafés</option><option>Retail</option><option>Healthcare</option><option>Hospitality</option><option>Services</option></select></div><div class="field"><label>Country</label><input name="country" value="Kazakhstan"></div><div class="field"><label>City</label><input name="city" value="${escapeHtml(state.business.city)}"></div><div class="field"><label>Number of locations</label><input name="locations" type="number" min="1" value="${state.business.locations}"></div></div>` : step===2 ? `<div class="field"><label>Primary brand name</label><input name="primary" required value="${escapeHtml(state.business.aliases[0]||state.business.name)}"></div><div class="field"><label>Alternative spellings, Russian / Kazakh spelling, abbreviations</label><textarea name="aliases" placeholder="One alias per line">${escapeHtml(state.business.aliases.slice(1).join('\n'))}</textarea></div><div class="field-grid"><div class="field"><label>Instagram handle</label><input name="handle" value="${escapeHtml(state.business.handle)}"></div><div class="field"><label>Website domain</label><input name="domain" value="${escapeHtml(state.business.website)}"></div></div>` : `<div class="source-search-panel"><div class="field-grid"><div class="field"><label>Business name</label><input name="sourceQuery" value="${escapeHtml(state.business.name)}" placeholder="Search business"></div><div class="field"><label>City</label><input name="sourceCity" value="${escapeHtml(state.business.city)}" placeholder="Almaty"></div></div><p class="form-note">Find your business, then add its page.</p></div><div class="source-choice onboarding-sources"><label><input type="checkbox" name="connect2gis" checked><span><strong>2GIS</strong><small>Business page</small></span><button type="button" class="btn btn-quiet" data-action="search-provider" data-provider="2GIS">Find</button><input name="twoGis" type="url" placeholder="Business page URL"></label><label><input type="checkbox" name="connectYandex"><span><strong>Yandex Maps</strong><small>Business page</small></span><button type="button" class="btn btn-quiet" data-action="search-provider" data-provider="Yandex Maps">Find</button><input name="yandexUrl" type="url" placeholder="Business page URL"></label><label><input type="checkbox" name="connectGoogle"><span><strong>Google Business</strong><small>Connect account later</small></span><button type="button" class="btn btn-quiet" data-action="search-provider" data-provider="Google Business">Find</button></label><label><input type="checkbox" name="connectInstagram"><span><strong>Instagram</strong><small>Connect account later</small></span><button type="button" class="btn btn-quiet" data-action="search-provider" data-provider="Instagram">Find</button></label></div>`;
-  return `<main class="center-shell"><section class="auth-story"><button class="form-link" data-action="logout">← Sign out</button><div style="margin-top:25px">${logo()}</div><h1>Set up your workspace.</h1><p>Three short steps and you are ready.</p></section><form class="form-card glass" data-form="onboarding"><div class="eyebrow">Step ${step} of 3</div><h2>${step===1?'Tell us about the business':step===2?'Define the brand identity':'Connect your first sources'}</h2><p>${step===1?'Add the basic business details.':step===2?'Add names people may use online.':'Choose where to collect feedback.'}</p><div class="stepper"><i class="step active"></i><i class="step ${step>1?'active':''}"></i><i class="step ${step>2?'active':''}"></i></div>${stepFields}<div class="form-actions">${step>1?'<button type="button" class="btn btn-secondary" data-action="onboarding-back">Back</button>':'<span></span>'}<button class="btn btn-primary" type="submit">${step===3?'Open workspace':'Continue'} →</button></div></form></main>`;
+  const industryOptions=INDUSTRIES.map(value=>`<option ${state.business.industry===value?'selected':''}>${value}</option>`).join('');
+  const stepFields = step===1
+    ? `<div class="field-grid"><div class="field"><label>Business name</label><input name="name" required value="${escapeHtml(state.business.name)}" placeholder="SDU University"></div><div class="field"><label>Industry</label><select name="industry">${industryOptions}</select></div><div class="field"><label>Country</label><input name="country" required value="${escapeHtml(state.business.country||'Kazakhstan')}"></div><div class="field"><label>City</label><input name="city" required value="${escapeHtml(state.business.city)}" placeholder="Almaty"></div></div><div class="field"><label>Custom industry <span class="muted">(only for Other)</span></label><input name="customIndustry" value="${escapeHtml(state.business.customIndustry||'')}" placeholder="Optional"></div>`
+    : step===2
+      ? `<div class="setup-summary"><span class="source-icon">${icons.radar}</span><div><strong>We will set up brand matching automatically</strong><p>SARAP creates search aliases from the business name. You can edit them later in Settings → Business profile.</p></div></div><div class="summary"><strong>${escapeHtml(state.business.name)}</strong><br>${escapeHtml(state.business.industry)} · ${escapeHtml(state.business.city)}, ${escapeHtml(state.business.country)}</div>`
+      : `<div class="setup-summary"><span class="source-icon">${icons.sources}</span><div><strong>Connect your first sources</strong><p>You can open the workspace now and connect sources later.</p></div></div><div class="onboarding-source-actions"><button type="button" class="btn btn-secondary" data-action="onboarding-add-source">+ Add source</button><button class="btn btn-primary" type="submit">Open workspace →</button></div>`;
+  return `<main class="center-shell"><section class="auth-story"><button class="form-link" data-action="logout">← Sign out</button><div style="margin-top:25px">${logo()}</div><h1>Set up your workspace.</h1><p>Only the details SARAP needs to start.</p></section><form class="form-card glass" data-form="onboarding"><div class="eyebrow">Step ${step} of 3</div><h2>${step===1?'Tell us about the business':step===2?'Confirm your workspace':'Connect your first sources'}</h2><p>${step===1?'Add the basic business details.':step===2?'Search aliases will be created automatically.':'Add a source now or continue without one.'}</p><div class="stepper"><i class="step active"></i><i class="step ${step>1?'active':''}"></i><i class="step ${step>2?'active':''}"></i></div>${stepFields}${step<3?`<div class="form-actions">${step>1?'<button type="button" class="btn btn-secondary" data-action="onboarding-back">Back</button>':'<span></span>'}<button class="btn btn-primary" type="submit">Continue →</button></div>`:''}</form></main>`;
 }
 
 const navItems = [['overview','Overview'],['mentions','Mentions'],['sources','Sources'],['discover','Discover'],['settings','Settings']];
@@ -220,7 +249,7 @@ function mentions(){
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
 
 function sources() {
-  return pageHead('Sources','Connect pages and check them for new public content.','<button class="btn btn-primary" data-action="connect-source">+ Connect source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong style="font-size:13px">${escapeHtml(s.name)}</strong><small class="muted" style="display:block;font-size:9px">${escapeHtml(s.kind)} · ${escapeHtml(s.method||'Automatic')}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><h3>${s.name.toLowerCase().includes('youtube')?'Public video comments':s.name.toLowerCase().includes('2gis')?'Public review monitoring':s.kind==='Official'?'Connected account':s.kind==='Monitored'?'Public page monitoring':'Historical data import'}</h3><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Last sync</span><strong>${escapeHtml(s.last)}</strong></div><div><span>Next sync</span><strong>${escapeHtml(s.next)}</strong></div><div><span>Items</span><strong>${s.items}</strong></div><div><span>Errors</span><strong>${s.errors}</strong></div></div>${s.kind!=='Imported'?`<div class="form-actions"><button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button><button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Test collection</button></div>`:''}</article>`).join('')}</section>`:emptyState('No sources connected','Add a public page, connected account or import source.','connect-source','Connect first source'));
+  return pageHead('Sources','Connect pages and collect new public feedback.','<button class="btn btn-primary" data-action="connect-source">+ Add source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong>${escapeHtml(s.name)}</strong><small>${escapeHtml(s.method||s.kind)}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Items</span><strong>${s.items==null?'—':s.items}</strong></div><div><span>Last checked</span><strong>${escapeHtml(s.last)}</strong></div></div><div class="source-actions">${s.kind!=='Imported'?`<button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Sync</button>`:''}<button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button></div></article>`).join('')}</section>`:emptyState('No sources connected','Add a public page, connected account or manual import.','connect-source','Add source'));
 }
 
 function discover() {
@@ -228,10 +257,9 @@ function discover() {
 }
 
 function settings() {
-  const tabs=['Business','Brand identity','Alerts','AI','Data','Account'];
+  const tabs=['Business profile','Alerts','AI','Data','Account'];
   let content='';
-  if(currentSettingsTab==='Business') content=`<h2>Business</h2><p class="muted">Used for entity matching and local analytics.</p><div class="field-grid"><div class="field"><label>Business name</label><input name="name" value="${escapeHtml(state.business.name)}"></div><div class="field"><label>Industry</label><input name="industry" value="${escapeHtml(state.business.industry)}"></div><div class="field"><label>City</label><input name="city" value="${escapeHtml(state.business.city)}"></div><div class="field"><label>Locations</label><input name="locations" type="number" value="${state.business.locations}"></div></div>`;
-  if(currentSettingsTab==='Brand identity') content=`<h2>Brand identity</h2><p class="muted">Aliases help SARAP reject unrelated search results.</p><div class="field"><label>Website</label><input name="website" value="${escapeHtml(state.business.website)}"></div><div class="field"><label>Social handle</label><input name="handle" value="${escapeHtml(state.business.handle)}"></div><div class="field"><label>Aliases</label><textarea name="aliases">${escapeHtml(state.business.aliases.join('\n'))}</textarea></div>`;
+  if(currentSettingsTab==='Business profile'||currentSettingsTab==='Business') content=`<h2>Business profile</h2><p class="muted">Business details and names SARAP uses for search.</p><div class="field-grid"><div class="field"><label>Business name</label><input name="name" value="${escapeHtml(state.business.name)}"></div><div class="field"><label>Industry</label><select name="industry">${INDUSTRIES.map(value=>`<option ${state.business.industry===value?'selected':''}>${value}</option>`).join('')}</select></div><div class="field"><label>Country</label><input name="country" value="${escapeHtml(state.business.country)}"></div><div class="field"><label>City</label><input name="city" value="${escapeHtml(state.business.city)}"></div></div><div class="field"><label>Search aliases</label><textarea name="aliases" placeholder="One name per line">${escapeHtml(state.business.aliases.join('\n'))}</textarea><small>SARAP generated these automatically. Add common Russian, Kazakh or abbreviated names if needed.</small></div>`;
   if(currentSettingsTab==='Alerts') content=`<h2>Telegram alerts</h2><p class="muted">Connect once through the SARAP bot. Your Telegram ID is detected automatically.</p><div class="toggle-row"><div><strong>Telegram bot</strong><small>Press Start in Telegram to connect this workspace.</small></div><button type="button" class="btn btn-secondary" data-action="connect-telegram">Connect Telegram ↗</button></div><div class="field" style="margin-top:15px"><label>Alert threshold</label><select name="threshold"><option ${state.settings.threshold==='Critical only'?'selected':''}>Critical only</option><option ${state.settings.threshold==='High + Critical'?'selected':''}>High + Critical</option><option ${state.settings.threshold==='All negative'?'selected':''}>All negative</option></select></div>`;
   if(currentSettingsTab==='AI') content=`<h2>AI</h2><p class="muted">Business tone, custom aspects and the two-stage model cascade.</p><div class="provider-grid"><div class="provider-card"><span class="status live">Fast pass</span><strong>Groq</strong><small>Every new mention · structured sentiment, language and aspects</small></div><div class="provider-arrow">→</div><div class="provider-card"><span class="status high">Strong pass</span><strong>Gemini</strong><small>Mixed language, low confidence and high-risk content only</small></div></div><div class="field"><label>Reply tone</label><input name="tone" value="${escapeHtml(state.settings.tone)}"></div><div class="field"><label>Custom aspects</label><textarea name="customAspects" placeholder="Parking, menu availability, loyalty program…">${escapeHtml(state.settings.customAspects)}</textarea></div><div class="toggle-row"><div><strong>Cheap-first cascade</strong><small>Groq handles the fast pass; Gemini reviews ambiguous or critical cases.</small></div><span class="status live">Configured on server</span></div><p class="form-note">API keys stay on the server. They are never entered or stored in this browser.</p>`;
   if(currentSettingsTab==='Data') content=`<h2>Data</h2><p class="muted">Export and retention controls.</p><div class="field"><label>Retention</label><select name="retention"><option>6 months</option><option selected>12 months</option><option>24 months</option></select></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="export">Export demo JSON</button><span class="muted" style="font-size:11px">External content is sanitized before display.</span></div>`;
@@ -312,7 +340,7 @@ async function pollBackendSource(source) {
   toast(added?'Collection finished':'Collection finished',added?`${added} new item(s) saved${provider}. ${duplicates} duplicate(s) skipped.`:`The collector succeeded${provider}; ${collected} item(s) returned and ${duplicates} duplicate(s) skipped.`);
 }
 
-function mapStoredSource(source) {
+function mapStoredSource(source, previous=null) {
   const labels={auto:'Automatic',api:'Connected account',scraper:'Public page'};
   const collectorLabels={playwright:'Browser',scrapfly:'Scrapfly',sociavault:'SociaVault',socialcrawl:'SocialCrawl',apify:'Apify'};
   const kind={official:'Official',monitored:'Monitored',provider:'Provider',imported:'Imported'}[source.connection_type]||'Monitored';
@@ -320,10 +348,10 @@ function mapStoredSource(source) {
   const status=statuses[source.status]||source.status||'Active';
   const state=(source.error_message||source.status==='error')?'high':(source.status==='active'||source.status==='ready')?'live':'';
   const isTwoGis=String(source.source||'').toLowerCase().includes('2gis');
-  const description=source.error_message||source.source_url||(isTwoGis?'Add the 2GIS business page URL to test collection.':status==='OAuth required'?'Connect the official account in source settings':'Choose the business page to finish setup');
+  const description=(source.error_message?friendlyError(source.error_message):'')||source.source_url||(isTwoGis?'Add the 2GIS business page URL to test collection.':status==='OAuth required'?'Connect the official account in source settings':'Choose the business page to finish setup');
   const activeCollector=collectorLabels[String(source.active_collection_method||'').toLowerCase()];
   const method=kind==='Imported'?'Import':activeCollector?`Collected by ${activeCollector}`:labels[source.collection_mode]||'Auto';
-  return {id:source.id,dbId:source.id,backendId:source.id,name:source.source,kind,collectionMode:source.collection_mode,method,status,state,description,sourceUrl:source.source_url||'',last:source.last_checked_at?new Date(source.last_checked_at).toLocaleString():'—',next:source.next_check_at?new Date(source.next_check_at).toLocaleString():'—',items:0,errors:source.error_message?1:0};
+  return {id:source.id,dbId:source.id,backendId:source.id,name:source.source,kind,collectionMode:source.collection_mode,method,status,state,description,sourceUrl:source.source_url||'',last:source.last_checked_at?new Date(source.last_checked_at).toLocaleString():'—',next:source.next_check_at?new Date(source.next_check_at).toLocaleString():'—',items:Number.isFinite(source.item_count)?source.item_count:(previous?.items??null),errors:source.error_message?1:0};
 }
 function uniqueSources(items) {
   const seen=new Set();
@@ -350,6 +378,7 @@ function sourceUrlProblem(sourceName,url){
       const isProfile=/^[A-Za-z0-9._]+$/.test(path)&&!['about','accounts','developer','direct','directory','emails','explore','legal','oauth','privacy','reels','stories','web'].includes(path.toLowerCase());
       if(!isPost&&!isProfile)return 'Use an Instagram profile, post or Reel link.';
     }
+    if(sourceName==='LinkedIn'&&!/(^|\.)linkedin\.com$/i.test(parsed.hostname))return 'Use a company or page link from linkedin.com.';
   }catch{return 'Paste a valid source URL.';}
   return '';
 }
@@ -359,7 +388,7 @@ function applyWorkspace(payload) {
   if(!payload?.business)return false;
   const business=payload.business;
   state.business={...state.business,id:business.id,name:business.name,website:business.website||'',industry:business.industry||'',country:business.country||'Kazakhstan',city:business.city||'',locations:business.location_count||1,aliases:payload.aliases||[]};
-  if(Array.isArray(payload.sources)) state.sources=uniqueSources(payload.sources.map(mapStoredSource));
+  if(Array.isArray(payload.sources)){const previous=new Map(state.sources.map(source=>[source.id,source]));state.sources=uniqueSources(payload.sources.map(source=>mapStoredSource(source,previous.get(source.id))));}
   return Boolean(business.onboarding_completed);
 }
 
@@ -457,27 +486,21 @@ async function authSubmit(form) {
 }
 async function onboardingSubmit(form) {
   const data=fieldData(form);
-  if(state.onboardingStep===1) Object.assign(state.business,{name:data.name,website:data.website,industry:data.industry,country:data.country,city:data.city,locations:Number(data.locations)});
-  if(state.onboardingStep===2) Object.assign(state.business,{aliases:[data.primary,...data.aliases.split('\n').map(x=>x.trim()).filter(Boolean)],handle:data.handle,website:data.domain});
-  if(state.onboardingStep<3) state.onboardingStep++; else {
+  if(state.onboardingStep===1){
+    const industry=data.industry==='Other'&&data.customIndustry?.trim()?data.customIndustry.trim():'Other'===data.industry?'Other':data.industry;
+    Object.assign(state.business,{name:data.name.trim(),industry,country:data.country.trim(),city:data.city.trim(),locations:1,website:'',handle:'',aliases:deterministicAliases(data.name)});
+    state.onboardingStep=2;
+  }else if(state.onboardingStep===2){
+    state.business.aliases=deterministicAliases(state.business.name);
     if(!state.session?.demo){
       form.classList.add('loading');
-      try{state.business.id=await completeWorkspace(state.business);}catch(error){form.classList.remove('loading');toast('Could not save workspace',error.message);return;}
+      try{state.business.id=await completeWorkspace(state.business);}catch(error){form.classList.remove('loading');toast('Could not create workspace',friendlyError(error));return;}
     }
-    const requested=[];
-    if(data.connect2gis)requested.push({name:'2GIS',method:data.twoGis?'scraper':'auto',url:data.twoGis||''});
-    if(data.connectYandex)requested.push({name:'Yandex Maps',method:data.yandexUrl?'scraper':'auto',url:data.yandexUrl||''});
-    if(data.connectGoogle)requested.push({name:'Google Business',method:'api',url:''});
-    if(data.connectInstagram)requested.push({name:'Instagram',method:'api',url:''});
-    for(const source of requested){
-      try{
-        if(state.session?.demo){state.sources.push({id:crypto.randomUUID(),name:source.name,kind:source.method==='api'?'Official':'Monitored',method:source.method==='api'?'API only':source.url?'URL scraper':'Setup required',status:source.method==='api'?'OAuth required':source.url?'Active':'Setup required',state:source.url?'live':'',description:source.url||'Complete this connection in Sources',sourceUrl:source.url,last:'—',next:'—',items:0,errors:0});}
-        else{const saved=await createBackendSource(source);state.sources.push(mapStoredSource(saved));}
-      }catch(error){toast(`${source.name} not saved`,error.message);}
-    }
-    state.route='overview';toast('Workspace ready','Your account and business data are saved.');
+    state.onboardingStep=3;
+  }else{
+    state.route='overview';toast('Workspace ready','You can add sources whenever you are ready.');
   }
-  saveState(); render();
+  saveState();render();
 }
 
 function smartReply(id) {
@@ -492,18 +515,17 @@ function editSourceModal(source){
 }
 
 function addSourceModal() {
-  modal(`<div class="modal-head"><div><h2>Connect a source</h2><p>Choose a source, then add its page or API access.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source"><div class="field-grid"><div class="field"><label>Source</label><select name="name"><option>2GIS</option><option>Yandex Maps</option><option>Google Business</option><option>Instagram</option><option>Threads</option><option>Telegram</option><option>YouTube</option><option>Website / RSS</option><option>CSV Import</option></select></div><div class="field"><label>Collection strategy</label><select name="method"><option value="auto">API + URL fallback</option><option value="api">Official API only</option><option value="scraper">Public URL only</option><option value="import">Manual import</option></select></div></div><div class="source-search-panel"><div class="field-grid"><div class="field"><label>Business or handle</label><input name="query" value="${escapeHtml(state.business.name)}" placeholder="1Fit"></div><div class="field"><label>City</label><input name="city" value="${escapeHtml(state.business.city)}" placeholder="Almaty"></div></div><button type="button" class="btn btn-secondary" data-action="search-provider" data-provider="selected">Find page ↗</button></div><div class="field" style="margin-top:14px"><label>Page URL</label><input name="url" type="url" placeholder="Open the exact page and copy its URL"><small>2GIS: copy the company card link containing /firm/ID. Other sources: copy the profile, post, channel or video URL.</small></div>${apiCredentialFields()}<div class="form-actions"><span></span><button class="btn btn-primary">Add source</button></div></form>`);
-  return pageHead('Sources','API-first collection with a controlled URL fallback when credentials are unavailable.','<button class="btn btn-primary" data-action="connect-source">+ Connect source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong style="font-size:13px">${escapeHtml(s.name)}</strong><small class="muted" style="display:block;font-size:9px">${escapeHtml(s.kind)} · ${escapeHtml(s.method||'Auto')}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><h3>${s.method?.startsWith('Auto')?'API → URL fallback':s.kind==='Official'?'Official API connection':s.kind==='Monitored'?'Focused URL monitoring':'Historical data import'}</h3><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Last sync</span><strong>${escapeHtml(s.last)}</strong></div><div><span>Next sync</span><strong>${escapeHtml(s.next)}</strong></div><div><span>Items</span><strong>${s.items}</strong></div><div><span>Errors</span><strong>${s.errors}</strong></div></div>${s.kind!=='Imported'?`<div class="form-actions"><button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button><button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Test collection</button></div>`:''}</article>`).join('')}</section>`:emptyState('No sources connected','Add an official API, a monitored public URL, or an import source.','connect-source','Connect first source'));
+  modal(`<div class="modal-head"><div><h2>Add source</h2><p>Connect the page you want SARAP to monitor.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source"><input type="hidden" name="method" value="auto"><div class="field"><label>Source</label><select name="name" data-source-select><option>2GIS</option><option>Yandex Maps</option><option>Google Business</option><option>Instagram</option><option>Threads</option><option>LinkedIn</option><option>YouTube</option><option>Telegram</option><option>Website / RSS</option><option>Manual import</option></select></div><div class="field"><label>Business or handle <span class="muted">(optional)</span></label><input name="query" value="${escapeHtml(state.business.name)}" placeholder="Business name or @handle"></div><div class="field"><label>Page URL</label><input name="url" type="url" required placeholder="${escapeHtml(sourcePlaceholder('2GIS'))}"><small data-source-hint>${escapeHtml(sourceHint('2GIS'))}</small></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button><button class="btn btn-primary">Add source</button></div></form>`);
 }
 
 function sourcePlaceholder(name){
-  if(name==='2GIS')return 'https://2gis.kz/almaty/firm/70000000000000000';
-  if(name==='YouTube')return 'https://youtube.com/watch?v=...';
-  if(name==='Instagram')return 'https://instagram.com/brand';
-  if(name==='Telegram')return 'https://t.me/channel';
-  return 'https://...';
+  const values={'2GIS':'https://2gis.kz/almaty/firm/123…','Yandex Maps':'https://yandex.kz/maps/org/…','Google Business':'https://maps.google.com/…','Instagram':'https://instagram.com/brand','Threads':'https://threads.net/@brand','LinkedIn':'https://linkedin.com/company/brand','YouTube':'https://youtube.com/@channel','Telegram':'https://t.me/channel','Website / RSS':'https://example.com/feed.xml'};
+  return values[name]||'';
 }
-function sourceHint(name){if(name==='2GIS')return 'Open the company card and copy the link with /firm/ID.';if(name==='Instagram')return 'Profile link scans recent posts. A post or Reel link scans only that publication.';return 'Copy the exact profile, post, channel, video or business page URL.';}
+function sourceHint(name){
+  const values={'2GIS':'Open the company card → Share → Copy link.','Yandex Maps':'Open the organization → Share → Copy link.','Google Business':'Copy the Google Maps business link.','Instagram':'Paste a profile, post or Reel link.','Threads':'Paste the public profile or post link.','LinkedIn':'Paste the company or page link.','YouTube':'Paste a channel or video link.','Telegram':'Paste a public channel link or @username.','Website / RSS':'Paste the website or RSS feed URL.','Manual import':'Add the source, then paste text from Mentions.'};
+  return values[name]||'Paste the exact public page URL.';
+}
 function apiCredentialFields(name=''){
   return `<details class="api-fields"><summary>Official API access <span class="muted">Google Business / Instagram</span></summary><p class="form-note">Saved encrypted for this workspace only.</p><div class="field"><label>Access token</label><input name="accessToken" type="password" autocomplete="off" placeholder="Paste provider access token"></div><div class="field-grid"><div class="field"><label>Google account ID</label><input name="accountId" placeholder="accounts/..."></div><div class="field"><label>Google location ID</label><input name="locationId" placeholder="locations/..."></div></div><div class="field"><label>Instagram user ID</label><input name="instagramUserId" placeholder="Instagram numeric user ID"></div></details>`;
 }
@@ -583,7 +605,7 @@ document.addEventListener('click', async e => {
   if(action==='close-modal')closeModal();
   if(action==='copy-reply'){await navigator.clipboard?.writeText(target.dataset.text);toast('Copied','Review the response before sending.');closeModal();}
   if(action==='regenerate-reply'){closeModal();smartReply(target.dataset.id);toast('Reply regenerated','A fresh draft is ready to review.');}
-  if(action==='connect-source')addSourceModal();
+  if(action==='connect-source'||action==='onboarding-add-source')addSourceModal();
   if(action==='connect-telegram'){
     target.disabled=true;
     try{const response=await fetch(apiPath(`/api/telegram/connect?business_id=${encodeURIComponent(state.business.id)}`),{method:'POST',headers:await apiAuthHeaders()});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Telegram connection is unavailable');window.open(body.url,'_blank','noopener,noreferrer');toast('Telegram opened','Press Start in the SARAP bot. Your chat will connect automatically.');}catch(error){toast('Could not connect Telegram',error.message);}finally{target.disabled=false;}
@@ -661,15 +683,16 @@ document.addEventListener('submit', async e => {
     }catch(error){form.classList.remove('loading');toast('Could not extract reviews',error.message);}
   }
   if(kind==='source'){
-    const d=fieldData(form);
+    const d=fieldData(form);form.classList.add('loading');
+    if(!d.method)d.method='auto';
     if(['Google Business','Instagram'].includes(d.name)&&d.method==='auto'&&!d.url)d.method='api';
-    if(d.name==='CSV Import')d.method='import';
-    if(d.method==='scraper'&&!d.url){toast('URL required','Scraper mode needs a public source URL.');return;}
+    if(d.name==='Manual import')d.method='import';
+    if(d.method==='scraper'&&!d.url){form.classList.remove('loading');toast('URL required','Paste the public source URL.');return;}
     const urlProblem=sourceUrlProblem(d.name,d.url);
-    if(urlProblem){toast('Invalid source link',urlProblem);return;}
+    if(urlProblem){form.classList.remove('loading');toast('Invalid source link',urlProblem);return;}
     const collectionMode=d.method==='import'?'auto':d.method;
     const duplicate=state.sources.some(s=>s.name===d.name&&s.collectionMode===collectionMode&&(s.sourceUrl||'')===(d.url||''));
-    if(duplicate){toast('Already connected','This source and collection strategy already exist.');return;}
+    if(duplicate){form.classList.remove('loading');toast('Already connected','This source is already connected.');return;}
     try{
       if(state.session?.demo){
         const labels={auto:'Auto · API preferred',api:'API only',scraper:'URL scraper',import:'Import'};
@@ -680,7 +703,7 @@ document.addEventListener('submit', async e => {
       }else{
         const backend=await createBackendSource(d);await saveApiCredentials(backend,d.name,d);state.sources=uniqueSources([...state.sources,mapStoredSource(backend)]);
       }
-    }catch(error){toast('Could not save source',error.message);return;}
+    }catch(error){form.classList.remove('loading');toast('Could not add source',friendlyError(error));return;}
     saveState();closeModal();render();toast('Source added',`${d.name} was saved.`);
   }
   if(kind==='source-edit'){
@@ -697,7 +720,7 @@ document.addEventListener('submit', async e => {
     }catch(error){toast('Could not update source',error.message);}
   }
   if(kind==='mention'){const d=fieldData(form);const normalized=d.text.trim().replace(/\s+/g,' ');if(state.mentions.some(m=>m.text.toLowerCase()===normalized.toLowerCase())){toast('Duplicate ignored','The normalized content already exists.');return;}if(state.session?.demo){const ai=analyzeDemo(normalized,d.rating);const m={id:crypto.randomUUID(),source:d.source,type:'review',author:'Manual demo entry',time:'Just now',text:normalized,rating:Number(d.rating),reviewed:false,...ai};state.mentions.unshift(m);if(m.risk>=60)state.alerts.unshift({id:crypto.randomUUID(),severity:m.risk>=80?'Critical':'High',source:m.source,time:'Just now',aspect:m.aspects.find(a=>a[1]==='neg')?.[0]||'Overall',risk:m.risk,text:m.text,status:'New'});}else{const response=await fetch(apiPath(`/api/mentions/ingest?business_id=${encodeURIComponent(state.business.id)}`),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({source:d.source,source_type:'review',external_id:`manual-${crypto.randomUUID()}`,author_name:'Manual entry',text:normalized,rating:Number(d.rating),metadata:{origin:'manual'}})});if(!response.ok){toast('Could not analyze mention',(await response.json()).detail||'Request failed');return;}await loadProductData();}saveState();closeModal();render();toast('Mention analyzed','The mention, AI analysis and risk score were saved.');}
-  if(kind==='settings'){const d=fieldData(form);if(currentSettingsTab==='Business')Object.assign(state.business,{name:d.name,industry:d.industry,city:d.city,locations:Number(d.locations)});if(currentSettingsTab==='Brand identity')Object.assign(state.business,{website:d.website,handle:d.handle,aliases:d.aliases.split('\n').map(x=>x.trim()).filter(Boolean)});if(currentSettingsTab==='Alerts')state.settings.threshold=d.threshold;if(currentSettingsTab==='AI')Object.assign(state.settings,{tone:d.tone,customAspects:d.customAspects});if(currentSettingsTab==='Account'&&d.fullName)state.session.name=d.fullName.trim();if(!state.session?.demo){try{if(['Business','Brand identity'].includes(currentSettingsTab))await completeWorkspace(state.business);if(currentSettingsTab==='Account')await db(`/profiles?id=eq.${encodeURIComponent(state.accountUserId)}`,{method:'PATCH',body:{full_name:state.session.name,updated_at:new Date().toISOString()}});if(['Alerts','AI'].includes(currentSettingsTab))await db('/workspace_settings?on_conflict=business_id',{method:'POST',prefer:'resolution=merge-duplicates',body:{business_id:state.business.id,alert_threshold:state.settings.threshold==='Critical only'?80:state.settings.threshold==='All negative'?30:60,reply_tone:state.settings.tone,custom_aspects:state.settings.customAspects,telegram_alerts:true}});}catch(error){toast('Could not save settings',error.message);return;}}saveState();render();toast('Settings saved',state.session?.demo?'Saved in this browser.':'Saved to your SARAP workspace.');}
+  if(kind==='settings'){const d=fieldData(form);if(['Business','Business profile'].includes(currentSettingsTab))Object.assign(state.business,{name:d.name,industry:d.industry,country:d.country,city:d.city,aliases:d.aliases.split('\n').map(x=>x.trim()).filter(Boolean)});if(currentSettingsTab==='Alerts')state.settings.threshold=d.threshold;if(currentSettingsTab==='AI')Object.assign(state.settings,{tone:d.tone,customAspects:d.customAspects});if(currentSettingsTab==='Account'&&d.fullName)state.session.name=d.fullName.trim();if(!state.session?.demo){try{if(['Business','Business profile'].includes(currentSettingsTab))await completeWorkspace(state.business);if(currentSettingsTab==='Account')await db(`/profiles?id=eq.${encodeURIComponent(state.accountUserId)}`,{method:'PATCH',body:{full_name:state.session.name,updated_at:new Date().toISOString()}});if(['Alerts','AI'].includes(currentSettingsTab))await db('/workspace_settings?on_conflict=business_id',{method:'POST',prefer:'resolution=merge-duplicates',body:{business_id:state.business.id,alert_threshold:state.settings.threshold==='Critical only'?80:state.settings.threshold==='All negative'?30:60,reply_tone:state.settings.tone,custom_aspects:state.settings.customAspects,telegram_alerts:true}});}catch(error){toast('Could not save settings',error.message);return;}}saveState();render();toast('Settings saved',state.session?.demo?'Saved in this browser.':'Saved to your SARAP workspace.');}
 });
 
 function filterMentions() {
@@ -705,7 +728,15 @@ function filterMentions() {
   document.querySelectorAll('[data-mention]').forEach(card=>{const item=[...state.mentions,...state.discoveries].find(m=>m.id===card.dataset.mention);const text=card.textContent.toLowerCase();const typeOk=type==='all'||item.type===type;const riskOk=risk==='all'||(risk==='high'&&item.risk>=60)||(risk==='medium'&&item.risk>=30&&item.risk<60)||(risk==='low'&&item.risk<30);const match=text.includes(q)&&typeOk&&riskOk;card.classList.toggle('hidden',!match);if(match)shown++;}); document.querySelector('#mentions-empty')?.classList.toggle('hidden',shown>0);
 }
 document.addEventListener('input',e=>{if(e.target.id==='mention-search'){const query=e.target.value.toLowerCase();document.querySelectorAll('[data-mention-row]').forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(query)));}if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();});
-document.addEventListener('change',e=>{if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();});
+document.addEventListener('change',e=>{
+  if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();
+  if(e.target.matches('[data-source-select]')){
+    const form=e.target.closest('form'), name=e.target.value, url=form?.querySelector('[name="url"]'), hint=form?.querySelector('[data-source-hint]'), method=form?.querySelector('[name="method"]');
+    if(url){url.placeholder=sourcePlaceholder(name);url.required=!['Google Business','Manual import'].includes(name);}
+    if(hint)hint.textContent=sourceHint(name);
+    if(method)method.value=name==='Manual import'?'import':'auto';
+  }
+});
 
 app.innerHTML='<main class="center-shell"><section class="form-card glass"><h2>Opening SARAP…</h2><p>Checking your secure session.</p><div class="skeleton"></div></section></main>';
 void loadPublicConfig();

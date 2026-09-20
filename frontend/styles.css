@@ -307,3 +307,18 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
 .recommendation-item h3 { margin:0 0 10px;font-size:12px;text-transform:capitalize; }.recommendation-item ul{margin:0;padding-left:17px}.recommendation-item li{margin:7px 0;font-size:11px;line-height:1.5}
 @media (max-width:980px){.topbar-inner{grid-template-columns:auto minmax(0,1fr) auto}.top-nav{overflow-x:auto;justify-content:flex-start;scrollbar-width:none}.top-nav::-webkit-scrollbar{display:none}}
 @media (max-width:720px){.overview-section-head{align-items:flex-start;flex-direction:column}.recommendation-grid{grid-template-columns:1fr}}
+
+/* Compact onboarding and source management */
+.setup-summary { display:flex; gap:13px; align-items:flex-start; padding:16px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.45); }
+.setup-summary strong { display:block; margin:2px 0 5px; font-size:13px; }
+.setup-summary p { margin:0; color:var(--muted); font-size:11px; line-height:1.55; }
+.onboarding-source-actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:18px; }
+.source-grid { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; }
+.source-card { min-height:0; padding:15px; }
+.source-card > p { min-height:34px; margin:11px 0; display:-webkit-box; overflow:hidden; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.source-head small { display:block; margin-top:2px; color:var(--muted); font-size:9px; }
+.source-stats { grid-template-columns:90px minmax(0,1fr); margin:0; }
+.source-stats strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.source-actions { display:flex; justify-content:flex-end; gap:5px; margin-top:11px; padding-top:10px; border-top:1px solid var(--line); }
+.source-actions .btn { padding:8px 10px; }
+@media (max-width:760px){.source-grid,.onboarding-source-actions{grid-template-columns:1fr}}
