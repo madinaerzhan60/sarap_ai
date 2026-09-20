@@ -118,8 +118,10 @@ function friendlyError(error) {
   if(/failed to fetch|networkerror|load failed|api is unavailable/i.test(message))return 'SARAP could not reach the server. Try again in a moment.';
   if(/already|duplicate|unique/i.test(message))return 'This source is already connected.';
   if(/401|403|unauthor|forbidden|token|credential/i.test(message))return 'This connection needs valid access in Source settings → Advanced integration.';
+  if(/telegram.{0,80}(not configured|missing)|missing.{0,80}telegram/i.test(message))return 'Telegram monitoring is not configured yet.';
   if(/captcha|verification|robots\.txt|blocked|not allow/i.test(message))return 'The website blocked automatic collection. Try Sync later or connect an advanced integration.';
   if(/timeout|timed out/i.test(message))return 'The source took too long to respond. Try again.';
+  if(/playwright|chromium|browsertype|scrapfly|apify|collector returned no structured|collection failed through/i.test(message))return 'Automatic collection is temporarily unavailable. Try Sync again later.';
   return message||'Something went wrong. Check the details and try again.';
 }
 function setRoute(route) { state.route=['analytics','alerts'].includes(route)?'overview':route; if(location.protocol!=='file:')history.replaceState(null,'',state.route==='admin'?'/admin':'/'); saveState(); render(); window.scrollTo(0,0); if(state.route==='admin')loadAdminData(); if(state.route==='overview')loadAnalyticsData(); }
