@@ -242,7 +242,18 @@ function mentionTableRow(item){
 const mentionFilters={source:'all',type:'all',sentiment:'all',author:'all',analysis:'all',reply:'all',date:'all',rating:'all',risk:'all',sort:'newest'};
 function filteredMentions(){
   const cutoff=mentionFilters.date==='all'?null:Date.now()-Number(mentionFilters.date)*86400000;
-  const rows=state.mentions.filter(item=>(mentionFilters.source==='all'||item.source.toLowerCase().includes(mentionFilters.source))&&(mentionFilters.type==='all'||item.contentType===mentionFilters.type)&&(mentionFilters.sentiment==='all'||item.sentiment===mentionFilters.sentiment)&&(mentionFilters.author==='all'||item.authorType===mentionFilters.author)&&(mentionFilters.analysis==='all'||(mentionFilters.analysis==='included')===item.includeInAnalysis)&&(mentionFilters.reply==='all'||(mentionFilters.reply==='answered'?(item.replyStatus==='answered'):(item.replyStatus!=='answered'))&&(!cutoff||new Date(item.publishedAt||item.collectedAt).getTime()>=cutoff)&&(mentionFilters.rating==='all'||Number(item.rating)===Number(mentionFilters.rating))&&(mentionFilters.risk==='all'||(mentionFilters.risk==='high'?item.risk>=60:mentionFilters.risk==='medium'?item.risk>=30&&item.risk<60:item.risk<30)));
+  const rows=state.mentions.filter(item=>{
+    const sourceOk=mentionFilters.source==='all'||item.source.toLowerCase().includes(mentionFilters.source);
+    const typeOk=mentionFilters.type==='all'||item.contentType===mentionFilters.type;
+    const sentimentOk=mentionFilters.sentiment==='all'||item.sentiment===mentionFilters.sentiment;
+    const authorOk=mentionFilters.author==='all'||item.authorType===mentionFilters.author;
+    const analysisOk=mentionFilters.analysis==='all'||(mentionFilters.analysis==='included')===item.includeInAnalysis;
+    const replyOk=mentionFilters.reply==='all'||(mentionFilters.reply==='answered'?item.replyStatus==='answered':item.replyStatus!=='answered');
+    const dateOk=!cutoff||new Date(item.publishedAt||item.collectedAt).getTime()>=cutoff;
+    const ratingOk=mentionFilters.rating==='all'||Number(item.rating)===Number(mentionFilters.rating);
+    const riskOk=mentionFilters.risk==='all'||(mentionFilters.risk==='high'?item.risk>=60:mentionFilters.risk==='medium'?item.risk>=30&&item.risk<60:item.risk<30);
+    return sourceOk&&typeOk&&sentimentOk&&authorOk&&analysisOk&&replyOk&&dateOk&&ratingOk&&riskOk;
+  });
   return rows.sort((a,b)=>mentionFilters.sort==='oldest'?new Date(a.publishedAt||a.collectedAt)-new Date(b.publishedAt||b.collectedAt):mentionFilters.sort==='risk'?b.risk-a.risk:mentionFilters.sort==='rating-low'?(a.rating??6)-(b.rating??6):mentionFilters.sort==='rating-high'?(b.rating??-1)-(a.rating??-1):new Date(b.publishedAt||b.collectedAt)-new Date(a.publishedAt||a.collectedAt));
 }
 function mentions(){
