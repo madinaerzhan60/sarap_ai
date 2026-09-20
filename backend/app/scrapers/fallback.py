@@ -9,7 +9,7 @@ import random
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -44,6 +44,50 @@ class TransientProviderError(ProviderError):
 
 class StorageWriteError(RuntimeError):
     pass
+
+
+def env_enabled(name: str, default: bool = False) -> bool:
+    return os.getenv(name, "true" if default else "false").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def paid_provider_enabled(provider: str) -> bool:
+    """Paid collectors require both the global and provider-specific opt-in."""
+    return env_enabled("ENABLE_PAID_FALLBACKS") and env_enabled(f"ENABLE_{provider.upper()}")
+
+
+class ProviderUsageGuard:
+    """Small runtime circuit breaker; durable counters are also persisted by production workers."""
+
+    _state: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    @classmethod
+    def reset(cls) -> None:
+        cls._state.clear()
+
+    @classmethod
+    def allow(cls, provider: str, business_id: str) -> tuple[bool, str | None]:
+        today = datetime.now(timezone.utc).date().isoformat()
+        key = (provider, business_id or "global", today)
+        row = cls._state.setdefault(key, {"calls": 0, "failures": 0, "disabled_until": None})
+        disabled_until = row.get("disabled_until")
+        if disabled_until and disabled_until > datetime.now(timezone.utc):
+            return False, "circuit breaker cooldown"
+        maximum = int(os.getenv(f"{provider.upper()}_MAX_CALLS_PER_BUSINESS_PER_DAY", "2"))
+        if row["calls"] >= maximum:
+            return False, "daily limit reached"
+        row["calls"] += 1
+        return True, None
+
+    @classmethod
+    def record(cls, provider: str, business_id: str, success: bool) -> None:
+        today = datetime.now(timezone.utc).date().isoformat()
+        row = cls._state.setdefault((provider, business_id or "global", today), {"calls": 0, "failures": 0, "disabled_until": None})
+        if success:
+            row["failures"] = 0
+            return
+        row["failures"] += 1
+        if row["failures"] >= int(os.getenv("PROVIDER_FAILURE_THRESHOLD", "3")):
+            row["disabled_until"] = datetime.now(timezone.utc) + timedelta(minutes=int(os.getenv("PROVIDER_COOLDOWN_MINUTES", "60")))
 
 
 class CollectorProvider(ABC):
@@ -379,7 +423,7 @@ class ScrapflyProvider(CollectorProvider):
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key)
+        return paid_provider_enabled("scrapfly") and bool(self.api_key)
 
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
         if not self.configured:
@@ -419,7 +463,7 @@ class ApifyProvider(CollectorProvider):
 
     @property
     def configured(self) -> bool:
-        return bool(self.token and self.actor_id)
+        return paid_provider_enabled("apify") and bool(self.token and self.actor_id)
 
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
         if not self.configured:
@@ -505,10 +549,11 @@ def _instagram_html_items(html: str, target_url: str, limit: int, collected_by: 
 
 
 class FallbackPipeline:
-    def __init__(self, platform: str, providers: list[CollectorProvider], storage: SupabaseRawReviewStore | None = None) -> None:
+    def __init__(self, platform: str, providers: list[CollectorProvider], storage: SupabaseRawReviewStore | None = None, business_id: str = "global") -> None:
         self.platform = platform
         self.providers = providers
         self.storage = storage
+        self.business_id = business_id
         self.log = logging.getLogger(f"sarap.fallback.{platform}")
 
     async def collect_items(
@@ -522,8 +567,14 @@ class FallbackPipeline:
         attempts = max(1, int(os.getenv("FALLBACK_RETRY_ATTEMPTS", "2")))
         for provider in self.providers:
             if not provider.configured:
-                failures.append({"provider": provider.name, "error": "not configured"})
+                failures.append({"provider": provider.name, "error": "disabled or not configured"})
                 continue
+            is_paid = provider.name in {"apify", "scrapfly"}
+            if is_paid:
+                allowed, reason = ProviderUsageGuard.allow(provider.name, self.business_id)
+                if not allowed:
+                    failures.append({"provider": provider.name, "error": reason or "usage limit"})
+                    continue
             for retry_number in range(attempts):
                 try:
                     items = await provider.collect(target_url, limit)
@@ -531,6 +582,8 @@ class FallbackPipeline:
                     if not unique:
                         raise EmptyResult(f"{provider.name}: empty result")
                     normalized = list(unique.values())[:limit]
+                    if is_paid:
+                        ProviderUsageGuard.record(provider.name, self.business_id, True)
                     return normalized, provider.name, failures
                 except ConfirmedEmptyResult:
                     # A verified zero is a successful collection. Calling a paid
@@ -547,6 +600,8 @@ class FallbackPipeline:
                         failures.append({"provider": provider.name, "error": str(exc)})
                 except (EmptyResult, ProviderError) as exc:
                     failures.append({"provider": provider.name, "error": str(exc)})
+                    if is_paid:
+                        ProviderUsageGuard.record(provider.name, self.business_id, False)
                     break
                 except StorageWriteError:
                     raise

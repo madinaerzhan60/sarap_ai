@@ -9,7 +9,7 @@ from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnec
 from app.collectors.registry import SourceType, collector_registry, normalize_source_type
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
 from app.scrapers.models import detect_language
-from app.scrapers.fallback import ApifyProvider, CollectorProvider, ConfirmedEmptyResult, FallbackPipeline, instagram_post_urls, normalize_api_item
+from app.scrapers.fallback import ApifyProvider, CollectorProvider, ConfirmedEmptyResult, FallbackPipeline, ProviderUsageGuard, ScrapflyProvider, instagram_post_urls, normalize_api_item
 from app.scrapers.models import ScrapedItem
 from app.scrapers.maps_playwright import PROFILES, extract_map_items, google_navigation_url
 import asyncio
@@ -242,7 +242,7 @@ def test_missing_telegram_configuration_returns_structured_failure(monkeypatch):
         "source": "Telegram", "collection_mode": "api", "source_url": "https://t.me/example",
     }))
     assert result.success is False
-    assert result.error_code == "not_configured"
+    assert result.error_code == "setup_required"
 
 
 def test_browser_error_is_structured(monkeypatch):
@@ -258,7 +258,7 @@ def test_browser_error_is_structured(monkeypatch):
     assert result.collected_count == 0
 
 
-def test_empty_dynamic_collection_is_failure(monkeypatch):
+def test_empty_dynamic_collection_is_success(monkeypatch):
     class EmptyConnector:
         connection_type = type("Connection", (), {"value": "monitored"})()
         collection_method = "test_provider"
@@ -268,8 +268,9 @@ def test_empty_dynamic_collection_is_failure(monkeypatch):
 
     monkeypatch.setattr(collector_registry, "resolve", lambda source, credentials=None: (SourceType.INSTAGRAM, EmptyConnector()))
     result = asyncio.run(collector_registry.collect({"source": "Instagram"}))
-    assert result.success is False
-    assert result.error_code == "parser_failed"
+    assert result.success is True
+    assert result.collected_count == 0
+    assert result.error_code is None
 
 
 def test_sociavault_comment_is_normalized():
@@ -332,6 +333,8 @@ def test_apify_2gis_review_is_normalized():
 
 
 def test_apify_2gis_sends_firm_id_and_filters_foreign_rows(monkeypatch):
+    monkeypatch.setenv("ENABLE_PAID_FALLBACKS", "true")
+    monkeypatch.setenv("ENABLE_APIFY", "true")
     captured = {}
 
     class Response:
@@ -480,3 +483,36 @@ def test_google_review_card_selector_extracts_review():
     assert [(item.author, item.rating, item.text_content) for item in items] == [
         ("Aida", 4.0, "Хороший сервис и удобное приложение")
     ]
+
+
+def test_paid_fallbacks_are_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("ENABLE_PAID_FALLBACKS", raising=False)
+    monkeypatch.setenv("APIFY_API_TOKEN", "token")
+    monkeypatch.setenv("SCRAPFLY_API_KEY", "key")
+    assert ApifyProvider("2gis", "token", "actor").configured is False
+    assert ScrapflyProvider("2gis", "key").configured is False
+
+
+def test_paid_provider_daily_limit_is_per_business(monkeypatch):
+    monkeypatch.setenv("ENABLE_PAID_FALLBACKS", "true")
+    monkeypatch.setenv("ENABLE_APIFY", "true")
+    monkeypatch.setenv("APIFY_MAX_CALLS_PER_BUSINESS_PER_DAY", "1")
+    ProviderUsageGuard.reset()
+    assert ProviderUsageGuard.allow("apify", "business-a")[0] is True
+    assert ProviderUsageGuard.allow("apify", "business-a") == (False, "daily limit reached")
+    assert ProviderUsageGuard.allow("apify", "business-b")[0] is True
+
+
+def test_linkedin_is_a_supported_discovery_source():
+    source_type, connector = collector_registry.resolve({
+        "source": "LinkedIn", "source_url": "https://www.linkedin.com/company/sdu-university", "business_id": str(uuid4())
+    })
+    assert source_type == SourceType.LINKEDIN
+    assert connector.collection_method == "discovery"
+
+
+def test_discovery_queries_include_social_sites():
+    from app.connectors.search import fan_out
+    queries = fan_out("SDU University", ["SDU", "СДУ"], "Almaty")
+    assert '"SDU University" site:linkedin.com' in queries
+    assert '"СДУ" site:threads.net' in queries

@@ -258,8 +258,9 @@ class TwoGisPlaywrightConnector(BaseConnector):
     connection_type = ConnectionType.monitored
     collection_method = "playwright"
 
-    def __init__(self, page_url: str) -> None:
+    def __init__(self, page_url: str, business_id: str = "global") -> None:
         self.page_url = normalize_twogis_business_url(page_url)
+        self.business_id = business_id
 
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         from typing import cast
@@ -283,8 +284,9 @@ class TwoGisPlaywrightConnector(BaseConnector):
                     os.getenv("APIFY_2GIS_INPUT_JSON"),
                 ),
             ],
+            business_id=self.business_id,
         )
-        scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=100)
+        scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=max(1, int(os.getenv("INITIAL_REVIEW_LIMIT", "500"))))
         if not provider:
             detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)
             raise ConnectorUnavailable(f"2GIS collection failed through every configured method. {detail}")
@@ -303,6 +305,8 @@ class TwoGisPlaywrightConnector(BaseConnector):
         ) for item in scraped]
         if last_seen_item_id:
             items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
+            if not items:
+                self.confirmed_empty = True
         return items
 
 
@@ -313,10 +317,11 @@ class InstagramFallbackConnector(BaseConnector):
     connection_type = ConnectionType.monitored
     collection_method = "playwright"
 
-    def __init__(self, page_url: str) -> None:
+    def __init__(self, page_url: str, business_id: str = "global") -> None:
         from app.scrapers.fallback import instagram_profile_handle
 
         self.page_url = _safe_public_url(page_url)
+        self.business_id = business_id
         host = (urlparse(self.page_url).hostname or "").lower()
         if host not in {"instagram.com", "www.instagram.com"}:
             raise ConnectorUnavailable("Instagram collection requires an instagram.com profile, post or reel URL")
@@ -357,7 +362,7 @@ class InstagramFallbackConnector(BaseConnector):
                 apify,
             ]
         )
-        pipeline = FallbackPipeline("instagram", providers)
+        pipeline = FallbackPipeline("instagram", providers, business_id=self.business_id)
         scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=500)
         if not provider:
             detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)
@@ -377,6 +382,8 @@ class InstagramFallbackConnector(BaseConnector):
         ) for item in scraped]
         if last_seen_item_id:
             items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
+            if not items:
+                self.confirmed_empty = True
         return items
 
 
@@ -414,6 +421,8 @@ class ModularScraperConnector(BaseConnector):
         ) for item in scraped]
         if last_seen_item_id:
             items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
+            if not items:
+                self.confirmed_empty = True
         return items
 
 
@@ -423,12 +432,13 @@ class MapFallbackConnector(BaseConnector):
     connection_type = ConnectionType.monitored
     collection_method = "playwright"
 
-    def __init__(self, platform: str, page_url: str) -> None:
+    def __init__(self, platform: str, page_url: str, business_id: str = "global") -> None:
         if platform not in {"google_maps", "yandex_maps"}:
             raise ValueError(f"Unsupported map platform: {platform}")
         self.platform = platform
         self.source = platform
         self.page_url = _safe_public_url(page_url)
+        self.business_id = business_id
 
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         from typing import cast
@@ -450,7 +460,7 @@ class MapFallbackConnector(BaseConnector):
                 os.getenv(f"APIFY_{env_prefix}_ACTOR_ID"),
                 os.getenv(f"APIFY_{env_prefix}_INPUT_JSON"),
             ),
-        ])
+        ], business_id=self.business_id)
         scraped, provider, failures = await pipeline.collect_items(self.page_url, limit=100)
         if not provider:
             detail = "; ".join(f"{row['provider']}: {row['error']}" for row in failures)
@@ -470,6 +480,8 @@ class MapFallbackConnector(BaseConnector):
         ) for item in scraped]
         if last_seen_item_id:
             items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
+            if not items:
+                self.confirmed_empty = True
         return items
 
 
@@ -584,6 +596,8 @@ class YouTubePublicConnector(BaseConnector):
         ) for item in scraped[:total_limit]]
         if last_seen_item_id:
             items = items[:next((index for index, item in enumerate(items) if item.external_id == last_seen_item_id), len(items))]
+            if not items:
+                self.confirmed_empty = True
         return items
 
 

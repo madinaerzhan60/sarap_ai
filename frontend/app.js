@@ -327,7 +327,7 @@ async function pollBackendSource(source) {
   const collected=Number(body.collected||0),added=Number(body.new||0),duplicates=Number(body.duplicates||0);
   source.items+=added;
   source.last='Just now';
-  source.status=added?`${added} new`:duplicates?`${duplicates} duplicate${duplicates===1?'':'s'}`:'No new items';
+  source.status=added?`${added} new`:'No new reviews';
   source.state=body.status==='success'?'live':'';
   if(!state.session?.demo){
     try{
@@ -337,7 +337,7 @@ async function pollBackendSource(source) {
   }
   saveState(); render();
   const provider=body.provider?` via ${body.provider}`:'';
-  toast(added?'Collection finished':'Collection finished',added?`${added} new item(s) saved${provider}. ${duplicates} duplicate(s) skipped.`:`The collector succeeded${provider}; ${collected} item(s) returned and ${duplicates} duplicate(s) skipped.`);
+  toast('Collection finished',added?`${added} new item(s) saved${provider}. ${duplicates} duplicate(s) skipped.`:(body.message||'No new reviews'));
 }
 
 function mapStoredSource(source, previous=null) {

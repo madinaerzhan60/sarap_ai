@@ -22,7 +22,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from app.connectors.reviews import ConnectorUnavailable, normalize_twogis_business_url
 from app.collectors.registry import collector_registry
-from app.connectors.search import FreeSearchProvider, fan_out
+from app.connectors.search import DiscoveryService, fan_out
 from app.models import DiscoveryRequest, ExtractedReview, MentionType, ProcessedMention, RawItem, ReviewExtractionRequest, ReviewImportRequest, SourceCreate, SourceOAuthCredential, SourceUpdate
 from app.services.llm import analyze_with_cascade, generate_business_recommendations
 from app.services.normalization import normalize
@@ -414,7 +414,8 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
         return JSONResponse(status_code=502, content={"status": "failed", "source": str(source.get("source", "unknown")), "provider": "registry", "collected": 0, "new": 0, "duplicates": 0, "warnings": [], "error_code": "collection_failed", "message": message, "detail": message})
     if not collection.success:
         if repository.configured:
-            await repository.update_source(source_id, {"status": "error", "error_message": collection.error_message, "last_checked_at": datetime.now(timezone.utc).isoformat()})
+            source_status = "setup_required" if collection.error_code == "setup_required" else "error"
+            await repository.update_source(source_id, {"status": source_status, "error_message": collection.error_message, "last_checked_at": datetime.now(timezone.utc).isoformat()})
         return JSONResponse(status_code=409, content={
             "status": "failed", "source": collection.source, "provider": collection.provider,
             "collected": 0, "new": 0, "duplicates": 0, "warnings": collection.warnings,
@@ -433,6 +434,7 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
         "collected": collection.collected_count, "new": len(results) - duplicates,
         "duplicates": duplicates, "warnings": collection.warnings,
         "items": [result.model_dump(mode="json") for result in results],
+        "message": "No new reviews" if not results else f"{len(results) - duplicates} new item(s)",
     }
     return JSONResponse(content=payload)
 
@@ -475,7 +477,7 @@ async def delete_source(source_id: UUID, context: AuthContext = Depends(require_
 async def discover(request: DiscoveryRequest, context: AuthContext = Depends(require_user)) -> dict:
     await require_business_member(context, request.business_id)
     queries = fan_out(request.brand_name, request.aliases, request.city)
-    provider = FreeSearchProvider()
+    provider = DiscoveryService()
     try:
         results, provider_status = await asyncio.wait_for(provider.search_many(queries, country="KZ", date_range="30d"), timeout=12)
     except asyncio.TimeoutError as exc:

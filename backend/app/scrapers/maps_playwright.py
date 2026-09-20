@@ -147,15 +147,25 @@ class PlaywrightMapScraper(BaseScraper):
                     await button.click()
                     await page.wait_for_timeout(1_500)
                     break
-        previous_height = 0
-        max_scrolls = min(max(12, limit // 10), int(os.getenv("PLAYWRIGHT_MAX_SCROLLS", "200")))
+        max_scrolls = min(max(12, limit // 8), int(os.getenv("PLAYWRIGHT_MAX_SCROLLS", "200")))
+        stagnant_attempts = 0
+        previous_count = 0
+        items: list[ScrapedItem] = []
         for _ in range(max_scrolls):
-            await page.mouse.wheel(0, 1200)
-            await asyncio.sleep(0.8)
-            height = await page.evaluate("document.body.scrollHeight")
-            if height == previous_height:
+            items = extract_map_items(await page.content(), self.profile, query, limit, "playwright")
+            unique_count = len({item.stable_id() for item in items})
+            if unique_count >= limit:
                 break
-            previous_height = height
+            stagnant_attempts = stagnant_attempts + 1 if unique_count <= previous_count else 0
+            if stagnant_attempts >= 3:
+                break
+            previous_count = unique_count
+            review_card = page.locator(', '.join(self.profile.card_selectors)).last
+            if await review_card.count():
+                await review_card.scroll_into_view_if_needed()
+            else:
+                await page.mouse.wheel(0, 1400)
+            await page.wait_for_timeout(int(os.getenv("PLAYWRIGHT_SCROLL_WAIT_MS", "900")))
         items = extract_map_items(await page.content(), self.profile, query, limit, "playwright")
         if not items:
             final_text = (await page.locator("body").inner_text()).casefold()

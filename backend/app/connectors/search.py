@@ -7,6 +7,7 @@ from html import unescape
 import os
 import re
 from xml.etree import ElementTree
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import asyncio
 
 import httpx
@@ -89,6 +90,36 @@ class GoogleNewsRssProvider(SearchProvider):
         return results
 
 
+class SearXNGProvider(SearchProvider):
+    """Self-hosted metasearch. Disabled until SEARXNG_URL is configured."""
+
+    @property
+    def configured(self) -> bool:
+        return bool(os.getenv("SEARXNG_URL", "").strip())
+
+    async def search(self, query: str, language: str = "all", country: str = "KZ", date_range: str = "30d") -> list[SearchResult]:
+        if not self.configured:
+            return []
+        endpoint = os.getenv("SEARXNG_URL", "").rstrip("/") + "/search"
+        params = {"q": query, "format": "json", "language": language, "safesearch": 1, "time_range": {"7d":"week","30d":"month","90d":"year"}.get(date_range, "month")}
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            response = await client.get(endpoint, params=params, headers={"Accept": "application/json"})
+            response.raise_for_status()
+        rows = response.json().get("results", [])
+        return [SearchResult(title=str(row.get("title") or "Untitled"), url=str(row["url"]), snippet=str(row.get("content") or row.get("title") or ""), source="SearXNG", relevance=.9) for row in rows[:50] if row.get("url")]
+
+
+def canonical_url(value: str) -> str:
+    parts = urlsplit(value)
+    query = urlencode([(key, val) for key, val in parse_qsl(parts.query, keep_blank_values=True) if not key.lower().startswith("utm_") and key.lower() not in {"fbclid", "gclid"}])
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/") or "/", query, ""))
+
+
+class DiscoveryProvider(ABC):
+    @abstractmethod
+    async def search_many(self, queries: list[str], *, country: str = "KZ", date_range: str = "30d") -> tuple[list[SearchResult], list[dict[str, object]]]: ...
+
+
 class FreeSearchProvider(SearchProvider):
     """Keyless discovery layer. Add RSS and monitored pages as connectors."""
 
@@ -112,9 +143,11 @@ class FreeSearchProvider(SearchProvider):
 
     async def search_many(self, queries: list[str], *, country: str = "KZ", date_range: str = "30d") -> tuple[list[SearchResult], list[dict[str, object]]]:
         """Search news queries concurrently while respecting GDELT's low request rate."""
-        jobs: list[tuple[str, str, SearchProvider]] = [
-            ("google_news", query, GoogleNewsRssProvider()) for query in queries[:3]
-        ]
+        jobs: list[tuple[str, str, SearchProvider]] = []
+        searx = SearXNGProvider()
+        if searx.configured:
+            jobs.extend(("searxng", query, searx) for query in queries[:8])
+        jobs.extend(("google_news", query, GoogleNewsRssProvider()) for query in queries[:3])
         if queries:
             jobs.append(("gdelt", queries[0], GdeltSearchProvider()))
 
@@ -139,7 +172,14 @@ class FreeSearchProvider(SearchProvider):
                 status["status"] = "limited" if error in {"timeout", "HTTP 429"} else "error"
                 status["detail"] = error
             results.extend(rows)
-        return list({item.url: item for item in results}.values()), list(grouped.values())
+        return list({canonical_url(item.url): item for item in results}.values()), list(grouped.values())
+
+
+class DiscoveryService(DiscoveryProvider):
+    """Provider-neutral public discovery orchestrator."""
+
+    async def search_many(self, queries: list[str], *, country: str = "KZ", date_range: str = "30d") -> tuple[list[SearchResult], list[dict[str, object]]]:
+        return await FreeSearchProvider().search_many(queries, country=country, date_range=date_range)
 
 
 def _gdelt_date(value: str | None) -> datetime | None:
@@ -154,6 +194,12 @@ def _gdelt_date(value: str | None) -> datetime | None:
 
 
 def fan_out(brand: str, aliases: list[str], city: str) -> list[str]:
-    names = [brand, *aliases]
-    intents = ["отзывы", "жалоба", "сервис", city, "Kazakhstan", "новости", "қауіп"]
-    return list(dict.fromkeys(f'"{name}" {intent}' for name in names for intent in intents))
+    names = list(dict.fromkeys(value.strip() for value in [brand, *aliases] if value.strip()))
+    queries: list[str] = []
+    for name in names:
+        queries.extend([
+            f'"{name}" Kazakhstan', f'"{name}" {city}'.strip(), f'"{name}" отзыв', f'"{name}" complaint',
+            f'"{name}" site:threads.net', f'"{name}" site:linkedin.com', f'"{name}" site:instagram.com',
+            f'"{name}" site:facebook.com', f'"{name}" site:reddit.com',
+        ])
+    return list(dict.fromkeys(queries))
