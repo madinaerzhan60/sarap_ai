@@ -82,7 +82,7 @@ class SupabaseRepository:
                 existing = await self._hydrate(existing_rows[0])
                 return existing.model_copy(update={"duplicate": True})
         else:
-            mention_rows = await self.request("POST", "mentions", json={
+            mention_payload = {
                 "id": str(m.id), "business_id": str(m.business_id), "source": m.source,
                 "source_type": m.source_type.value, "external_id": m.external_id,
                 "external_url": m.external_url, "author_name": m.author_name, "text": m.text,
@@ -93,7 +93,15 @@ class SupabaseRepository:
                 "include_in_analysis": m.include_in_analysis, "reply_draft": m.reply_draft,
                 "reply_generated_at": m.reply_generated_at.isoformat() if m.reply_generated_at else None,
                 "reply_status": m.reply_status.value,
-            }, prefer="return=representation")
+            }
+            try:
+                mention_rows = await self.request("POST", "mentions", json=mention_payload, prefer="return=representation")
+            except RepositoryUnavailable as exc:
+                if not any(column in str(exc) for column in ("content_type", "author_type", "include_in_analysis", "reply_draft", "reply_generated_at", "reply_status")):
+                    raise
+                for column in ("content_type", "author_type", "include_in_analysis", "reply_draft", "reply_generated_at", "reply_status"):
+                    mention_payload.pop(column, None)
+                mention_rows = await self.request("POST", "mentions", json=mention_payload, prefer="return=representation")
             mention_id = mention_rows[0]["id"]
         analysis_payload = {
             "mention_id": mention_id, "language": result.analysis.language,
@@ -149,7 +157,7 @@ class SupabaseRepository:
         )
         analysis = analysis_rows[0] if analysis_rows else {"language": row.get("language") or "unknown", "sentiment": "neutral", "summary": "", "sentiment_score": 0, "severity": "low", "confidence": 0, "escalated": False}
         risk = risk_rows[0] if risk_rows else {"score": 0, "level": "low", "reasons": []}
-        mention = NormalizedMention(**{k: row.get(k) for k in NormalizedMention.model_fields})
+        mention = NormalizedMention(**{k: row[k] for k in NormalizedMention.model_fields if k in row and row[k] is not None})
         return ProcessedMention(
             mention=mention,
             analysis=AIAnalysis(language=analysis["language"], sentiment=analysis["sentiment"], summary=analysis.get("summary") or "", sentiment_score=float(analysis.get("sentiment_score") or 0), severity=analysis["severity"], confidence=float(analysis.get("confidence") or 0), escalated=analysis.get("escalated", False), aspects=[Aspect(aspect=a["aspect"], sentiment=a["sentiment"]) for a in aspect_rows]),
