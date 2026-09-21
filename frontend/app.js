@@ -18,7 +18,6 @@ async function loadPublicConfig() {
     if (response.ok) {
       const remote = await response.json();
       const configured = Object.fromEntries(Object.entries(remote).filter(([, value]) => value !== '' && value != null));
-      window.SARAP_CONFIG = { ...(window.SARAP_CONFIG || {}), ...configured };
     }
   } catch { /* Local standalone demo keeps blank config and uses demo auth. */ }
   finally { clearTimeout(timeout); }
@@ -258,9 +257,50 @@ function mentions(){
   const options=(values,current)=>values.map(([value,label])=>`<option value="${value}" ${current===value?'selected':''}>${label}</option>`).join('');
   const activeSecondary=[mentionFilters.analysis,mentionFilters.reply,mentionFilters.date].filter(x=>x!=='all').length;
   const actions=`<input class="search" id="mention-search" type="search" placeholder="Search mentions…"><details class="filter-menu"><summary class="btn btn-secondary">Filters${activeSecondary?` (${activeSecondary})`:''}</summary><div class="mention-filters"><select class="filter" data-mention-filter="analysis">${options([['all','Included and ignored'],['included','Included'],['excluded','Ignored']],mentionFilters.analysis)}</select><select class="filter" data-mention-filter="reply">${options([['all','Answered and unanswered'],['answered','Answered'],['unanswered','Unanswered']],mentionFilters.reply)}</select><select class="filter" data-mention-filter="date">${options([['all','Any date'],['7','Last 7 days'],['30','Last 30 days'],['90','Last 90 days']],mentionFilters.date)}</select></div></details><button class="btn btn-secondary" data-action="export-csv">Export CSV</button><button class="btn btn-primary" data-action="manual-import">+ Manual import</button>`;
-  const headerFilter=(key,values)=>`<select aria-label="Filter ${key}" data-mention-filter="${key}">${options(values,mentionFilters[key])}</select>`;
+const headerFilter=(key,label,values)=>{
+  const active=mentionFilters[key]!=='all';
+  return `
+    <details class="filter-menu table-filter">
+      <summary class="table-sort ${active?'active':''}">
+        ${label}${active?' •':''} ▾
+      </summary>
+      <div class="mention-filters">
+        <select data-mention-filter="${key}">
+          ${options(values,mentionFilters[key])}
+        </select>
+      </div>
+    </details>`;
+};
   const sortButton=(label,value)=>{const inverse=value==='newest'?'oldest':value==='risk'?'risk-asc':'rating-low';return `<button class="table-sort" data-mention-sort="${value}">${label}${mentionFilters.sort===value?' ↓':mentionFilters.sort===inverse?' ↑':''}</button>`;};
-  return pageHead('Mentions','Customer feedback and factual AI summaries.',actions)+(all.length?`<div class="table-wrap mentions-table-wrap glass"><table class="mentions-table"><thead><tr><th>Summary</th><th>${headerFilter('source',[['all','Source'],['2gis','2GIS'],['google','Google'],['yandex','Yandex'],['youtube','YouTube'],['telegram','Telegram'],['instagram','Instagram'],['manual','Manual']])}</th><th>${headerFilter('type',[['all','Type'],['review','Review'],['comment','Comment'],['question','Question'],['post','Post'],['news','News'],['other','Other']])}</th><th>${headerFilter('sentiment',[['all','Sentiment'],['positive','Positive'],['neutral','Neutral'],['negative','Negative']])}</th><th>${sortButton('Rating','rating-high')}</th><th>${sortButton('Risk','risk')}</th><th>${sortButton('Published date','newest')}</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No matching mentions','Change the filters or import customer feedback.',null,null));
+  return pageHead('Mentions','Customer feedback and factual AI summaries.',actions)+(all.length?`<div class="table-wrap mentions-table-wrap glass"><table class="mentions-table"><thead><tr><th>Summary</th><th>
+    ${headerFilter('source','Source',[
+  ['all','All sources'],
+  ['2gis','2GIS'],
+  ['google','Google'],
+  ['yandex','Yandex'],
+  ['youtube','YouTube'],
+  ['telegram','Telegram'],
+  ['instagram','Instagram'],
+  ['manual','Manual']
+])}
+
+${headerFilter('type','Type',[
+  ['all','All types'],
+  ['review','Review'],
+  ['comment','Comment'],
+  ['question','Question'],
+  ['post','Post'],
+  ['news','News'],
+  ['other','Other']
+])}
+
+${headerFilter('sentiment','Sentiment',[
+  ['all','All sentiment'],
+  ['positive','Positive'],
+  ['neutral','Neutral'],
+  ['negative','Negative']
+])}
+    <th>${sortButton('Rating','rating-high')}</th><th>${sortButton('Risk','risk')}</th><th>${sortButton('Published date','newest')}</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No matching mentions','Change the filters or import customer feedback.',null,null));
 }
 
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
@@ -777,21 +817,37 @@ document.addEventListener('submit', async e => {
   if(kind==='settings'){const d=fieldData(form);if(['Business','Business profile'].includes(currentSettingsTab))Object.assign(state.business,{name:d.name,industry:d.industry,country:d.country,city:d.city,aliases:d.aliases.split('\n').map(x=>x.trim()).filter(Boolean)});if(currentSettingsTab==='Alerts')state.settings.threshold=d.threshold;if(currentSettingsTab==='AI')Object.assign(state.settings,{tone:d.tone,customAspects:d.customAspects});if(currentSettingsTab==='Account'&&d.fullName)state.session.name=d.fullName.trim();if(!state.session?.demo){try{if(['Business','Business profile'].includes(currentSettingsTab))await completeWorkspace(state.business);if(currentSettingsTab==='Account')await db(`/profiles?id=eq.${encodeURIComponent(state.accountUserId)}`,{method:'PATCH',body:{full_name:state.session.name,updated_at:new Date().toISOString()}});if(['Alerts','AI'].includes(currentSettingsTab))await db('/workspace_settings?on_conflict=business_id',{method:'POST',prefer:'resolution=merge-duplicates',body:{business_id:state.business.id,alert_threshold:state.settings.threshold==='Critical only'?80:state.settings.threshold==='All negative'?30:60,reply_tone:state.settings.tone,custom_aspects:state.settings.customAspects,telegram_alerts:true}});}catch(error){toast('Could not save settings',error.message);return;}}saveState();render();toast('Settings saved',state.session?.demo?'Saved in this browser.':'Saved to your SARAP workspace.');}
 });
 
-function filterMentions() {
-  const q=document.querySelector('#mention-search')?.value.toLowerCase()||''; const type=document.querySelector('#type-filter')?.value||'all'; const risk=document.querySelector('#risk-filter')?.value||'all'; let shown=0;
-  document.querySelectorAll('[data-mention]').forEach(card=>{const item=[...state.mentions,...state.discoveries].find(m=>m.id===card.dataset.mention);const text=card.textContent.toLowerCase();const typeOk=type==='all'||item.type===type;const riskOk=risk==='all'||(risk==='high'&&item.risk>=60)||(risk==='medium'&&item.risk>=30&&item.risk<60)||(risk==='low'&&item.risk<30);const match=text.includes(q)&&typeOk&&riskOk;card.classList.toggle('hidden',!match);if(match)shown++;}); document.querySelector('#mentions-empty')?.classList.toggle('hidden',shown>0);
-}
-document.addEventListener('input',e=>{if(e.target.id==='mention-search'){const query=e.target.value.toLowerCase();document.querySelectorAll('[data-mention-row]').forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(query)));}if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();});
+
+document.addEventListener('input',e=>{if(e.target.id==='mention-search'){const query=e.target.value.toLowerCase();document.querySelectorAll('[data-mention-row]').forEach(row=>row.classList.toggle('hidden',!row.textContent.toLowerCase().includes(query)));}});
 document.addEventListener('change',e=>{
-  if(['type-filter','risk-filter'].includes(e.target.id))filterMentions();
+
   if(e.target.matches('[data-mention-filter]')){mentionFilters[e.target.dataset.mentionFilter]=e.target.value;render();}
-  if(e.target.closest('[data-mention-sort]')){const value=e.target.closest('[data-mention-sort]').dataset.mentionSort;mentionFilters.sort=mentionFilters.sort===value?(value==='newest'?'oldest':value==='risk'?'risk-asc':value==='rating-high'?'rating-low':value):value;render();}
+
   if(e.target.matches('[data-source-select]')){
     const form=e.target.closest('form'), name=e.target.value, url=form?.querySelector('[name="url"]'), hint=form?.querySelector('[data-source-hint]'), method=form?.querySelector('[name="method"]');
     if(url){url.placeholder=sourcePlaceholder(name);url.required=!['Google Business','Manual import'].includes(name);}
     if(hint)hint.textContent=sourceHint(name);
     if(method)method.value=name==='Manual import'?'import':'auto';
   }
+});
+
+document.addEventListener('click',e=>{
+  const button=e.target.closest('[data-mention-sort]');
+  if(!button)return;
+
+  const value=button.dataset.mentionSort;
+
+  mentionFilters.sort=mentionFilters.sort===value
+    ? value==='newest'
+      ? 'oldest'
+      : value==='risk'
+        ? 'risk-asc'
+        : value==='rating-high'
+          ? 'rating-low'
+          : value
+    : value;
+
+  render();
 });
 
 app.innerHTML='<main class="center-shell"><section class="form-card glass"><h2>Opening SARAP…</h2><p>Checking your secure session.</p><div class="skeleton"></div></section></main>';
