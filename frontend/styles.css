@@ -404,3 +404,58 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
 .mention-detail-text{padding:15px;margin-bottom:14px;border-radius:12px;background:rgba(255,255,255,.55);font-size:13px;line-height:1.6}
 .detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}.detail-grid>div{padding:10px;border-radius:10px;background:rgba(255,255,255,.45)}.detail-grid span,.detail-grid strong{display:block}.detail-grid span{color:var(--muted);font-size:9px}.detail-grid strong{margin-top:3px;font-size:11px}.reply-editor{min-height:180px!important}
 @media(max-width:760px){.detail-grid{grid-template-columns:1fr 1fr}.mention-filters .filter{flex:1 1 44%}}
+
+.mentions-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.mentions-table thead tr,
+.mentions-table tbody tr {
+  display: table-row;
+}
+
+.mentions-table th,
+.mentions-table td {
+  display: table-cell;
+  vertical-align: middle;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+/* одинаковая ширина header и body */
+.mentions-table th:nth-child(1),
+.mentions-table td:nth-child(1) {
+  width: 32%;
+}
+
+.mentions-table th:nth-child(2),
+.mentions-table td:nth-child(2) {
+  width: 9%;
+}
+
+.mentions-table th:nth-child(3),
+.mentions-table td:nth-child(3) {
+  width: 10%;
+}
+
+.mentions-table th:nth-child(4),
+.mentions-table td:nth-child(4) {
+  width: 14%;
+}
+
+.mentions-table th:nth-child(5),
+.mentions-table td:nth-child(5) {
+  width: 8%;
+}
+
+.mentions-table th:nth-child(6),
+.mentions-table td:nth-child(6) {
+  width: 8%;
+}
+
+.mentions-table th:nth-child(7),
+.mentions-table td:nth-child(7) {
+  width: 13%;
+}
