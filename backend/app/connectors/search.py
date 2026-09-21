@@ -20,6 +20,26 @@ class SearchProvider(ABC):
     async def search(self, query: str, language: str, country: str, date_range: str) -> list[SearchResult]: ...
 
 
+class DiscoveryNotConfigured(RuntimeError):
+    pass
+
+
+class TavilyProvider(SearchProvider):
+    async def search(self, query: str, language: str = "all", country: str = "KZ", date_range: str = "30d") -> list[SearchResult]:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post("https://api.tavily.com/search", json={"api_key": os.environ["TAVILY_API_KEY"], "query": query, "max_results": 20, "search_depth": "basic"})
+            response.raise_for_status()
+        return [SearchResult(title=row.get("title") or "Untitled", url=row["url"], snippet=row.get("content") or "", source="Tavily", relevance=float(row.get("score") or .8)) for row in response.json().get("results", []) if row.get("url")]
+
+
+class BraveProvider(SearchProvider):
+    async def search(self, query: str, language: str = "all", country: str = "KZ", date_range: str = "30d") -> list[SearchResult]:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get("https://api.search.brave.com/res/v1/web/search", params={"q": query, "count": 20, "country": country}, headers={"X-Subscription-Token": os.environ["BRAVE_SEARCH_API_KEY"], "Accept": "application/json"})
+            response.raise_for_status()
+        return [SearchResult(title=row.get("title") or "Untitled", url=row["url"], snippet=row.get("description") or "", source="Brave", relevance=.85) for row in response.json().get("web", {}).get("results", []) if row.get("url")]
+
+
 class DemoSearchProvider(SearchProvider):
     async def search(self, query: str, language: str = "all", country: str = "KZ", date_range: str = "7d") -> list[SearchResult]:
         return [SearchResult(title="Coffee Boom opens a new location in Astana", url="https://example.com/demo-news", snippet="The Kazakhstan café chain is expanding its bakery menu.", source="Demo News", published_at=datetime.now(timezone.utc), relevance=.94)]
@@ -147,9 +167,12 @@ class FreeSearchProvider(SearchProvider):
         searx = SearXNGProvider()
         if searx.configured:
             jobs.extend(("searxng", query, searx) for query in queries[:8])
-        jobs.extend(("google_news", query, GoogleNewsRssProvider()) for query in queries[:3])
-        if queries:
-            jobs.append(("gdelt", queries[0], GdeltSearchProvider()))
+        elif os.getenv("TAVILY_API_KEY", "").strip():
+            jobs.extend(("tavily", query, TavilyProvider()) for query in queries[:8])
+        elif os.getenv("BRAVE_SEARCH_API_KEY", "").strip():
+            jobs.extend(("brave", query, BraveProvider()) for query in queries[:8])
+        else:
+            raise DiscoveryNotConfigured("Web discovery is not configured yet.")
 
         async def run(name: str, query: str, provider: SearchProvider) -> tuple[str, list[SearchResult], str | None]:
             try:

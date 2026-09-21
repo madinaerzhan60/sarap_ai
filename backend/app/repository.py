@@ -139,6 +139,18 @@ class SupabaseRepository:
         rows = await self.request("GET", "mentions", params={"select": "*", "business_id": f"eq.{business_id}", "order": "collected_at.desc", "limit": "500"})
         return [await self._hydrate(row) for row in rows]
 
+    async def author_is_ignored(self, business_id: UUID, source: str, author_key: str) -> bool:
+        rows = await self.request("GET", "ignored_authors", params={"select": "id", "business_id": f"eq.{business_id}", "source": f"eq.{source}", "author_key": f"eq.{author_key}", "limit": "1"})
+        return bool(rows)
+
+    async def set_author_ignored(self, business_id: UUID, source: str, author_key: str, ignored: bool) -> None:
+        match = {"business_id": f"eq.{business_id}", "source": f"eq.{source}", "author_key": f"eq.{author_key}"}
+        if ignored:
+            await self.request("POST", "ignored_authors", params={"on_conflict": "business_id,source,author_key"}, json={"business_id": str(business_id), "source": source, "author_key": author_key}, prefer="resolution=ignore-duplicates")
+        else:
+            await self.request("DELETE", "ignored_authors", params=match)
+        await self.request("PATCH", "mentions", params={"business_id": f"eq.{business_id}", "source": f"eq.{source}", "metadata->>author_key": f"eq.{author_key}"}, json={"include_in_analysis": not ignored})
+
     async def get_recommendation(self, business_id: UUID, period_start: str, period_end: str) -> dict[str, Any] | None:
         rows = await self.request("GET", "business_recommendations", params={"select": "*", "business_id": f"eq.{business_id}", "period_start": f"eq.{period_start}", "period_end": f"eq.{period_end}", "limit": "1"})
         return rows[0] if rows else None

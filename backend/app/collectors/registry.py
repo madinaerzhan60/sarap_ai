@@ -76,6 +76,8 @@ class CollectionResult:
 
 def _error_code(message: str) -> str:
     lowered = message.casefold()
+    if "collector_unavailable" in lowered or "requires collector_worker_url" in lowered:
+        return "collector_unavailable"
     for code in ("chromium_not_installed", "browser_launch_failed", "navigation_timeout", "parser_failed"):
         if code in lowered:
             return code
@@ -100,6 +102,8 @@ def _friendly_collection_error(source: str, code: str) -> str:
     label = {"2gis":"2GIS", "yandex_maps":"Yandex Maps", "google_maps":"Google Maps", "telegram":"Telegram", "instagram":"Instagram"}.get(source, source.replace("_", " ").title())
     if code == "setup_required":
         return f"{label} monitoring is not configured yet."
+    if code == "collector_unavailable":
+        return f"{label} collector is unavailable. Configure COLLECTOR_WORKER_URL."
     if code == "auth_required":
         return f"Reconnect {label} in Source settings."
     if code in {"captcha", "blocked"}:
@@ -140,18 +144,13 @@ class CollectorRegistry:
         source_type = normalize_source_type(str(source["source"]), page_url)
         mode = str(source.get("collection_mode", "auto"))
         use_worker = bool(os.getenv("COLLECTOR_WORKER_URL", "").strip())
-        if use_worker and source_type in {SourceType.TWO_GIS, SourceType.YANDEX_MAPS}:
+        if source_type in {SourceType.TWO_GIS, SourceType.YANDEX_MAPS}:
+            if not use_worker:
+                raise ConnectorUnavailable(f"collector_unavailable: {source_type.value} requires COLLECTOR_WORKER_URL")
             from app.connectors.worker import ExternalWorkerConnector
             if not page_url:
                 raise ConnectorUnavailable(f"{source_type.value} collection requires a public URL")
             return source_type, ExternalWorkerConnector(source_type.value, page_url)
-        if source_type == SourceType.TWO_GIS:
-            if mode == "auto" and os.getenv("ENABLE_DEMO_CONNECTORS", "false").lower() == "true":
-                from app.connectors.demo import DemoTwoGisConnector
-                return source_type, DemoTwoGisConnector()
-            if not page_url:
-                raise ConnectorUnavailable("2GIS collection requires the business page URL")
-            return source_type, TwoGisPlaywrightConnector(page_url, business_id)
         if source_type in {SourceType.GOOGLE_BUSINESS, SourceType.GOOGLE_MAPS}:
             if credentials and mode in {"auto", "api"}:
                 return SourceType.GOOGLE_BUSINESS, GoogleBusinessReviewsConnector(
@@ -165,10 +164,6 @@ class CollectorRegistry:
             if not page_url:
                 raise ConnectorUnavailable("Google Maps fallback requires a public Google Maps business URL")
             return SourceType.GOOGLE_MAPS, MapFallbackConnector("google_maps", page_url, business_id)
-        if source_type == SourceType.YANDEX_MAPS:
-            if not page_url:
-                raise ConnectorUnavailable("Yandex Maps collection requires the exact business page URL")
-            return source_type, MapFallbackConnector("yandex_maps", page_url, business_id)
         if source_type == SourceType.INSTAGRAM:
             if credentials and mode in {"auto", "api"}:
                 return source_type, InstagramGraphCommentsConnector(
@@ -178,7 +173,8 @@ class CollectorRegistry:
                 raise ConnectorUnavailable("Instagram OAuth is not connected for this workspace source")
             if not page_url:
                 raise ConnectorUnavailable("Instagram collection requires a public profile, post or reel URL")
-            return source_type, InstagramFallbackConnector(page_url, business_id)
+            from app.connectors.discovery import PublicDiscoveryConnector
+            return source_type, PublicDiscoveryConnector("instagram", page_url)
         if source_type == SourceType.YOUTUBE:
             if not page_url:
                 raise ConnectorUnavailable("YouTube collection requires a public video or channel URL")

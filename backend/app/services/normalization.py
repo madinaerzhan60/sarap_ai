@@ -20,5 +20,8 @@ def content_hash(item: RawItem) -> str:
 def normalize(item: RawItem, business_id: UUID) -> NormalizedMention:
     data = item.model_dump()
     data["text"] = normalize_text(item.text)
+    stable_author_id = str(item.metadata.get("author_id") or item.metadata.get("author_external_id") or "").strip()
+    normalized_name = normalize_text(item.author_name or "").casefold()
+    data["metadata"] = {**item.metadata, "author_key": stable_author_id or normalized_name}
     author_type, include_in_analysis = classify_author(item)
     return NormalizedMention(**data, business_id=business_id, content_hash=content_hash(item), content_type=classify_content(item), author_type=author_type, include_in_analysis=include_in_analysis)

@@ -23,6 +23,11 @@ def test_source_cards_keep_unknown_count_and_modal_closes_after_success():
 
 
 def test_mentions_include_required_filters_and_published_date():
-    for value in ('source','type','sentiment','author','analysis','reply','date','rating','risk','sort'):
+    for value in ('source','type','sentiment'):
+        assert f"headerFilter('{value}'" in APP
+    for value in ('analysis','reply','date'):
         assert f'data-mention-filter="{value}"' in APP
+    assert 'data-mention-filter="author"' not in APP
+    assert 'Author type</span>' not in APP
+    assert 'data-mention-sort="${value}"' in APP
     assert "Published date" in APP

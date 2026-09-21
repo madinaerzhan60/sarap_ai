@@ -199,7 +199,7 @@ class SociaVaultProvider(CollectorProvider):
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key)
+        return paid_provider_enabled("sociavault") and bool(self.api_key)
 
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
         if not self.configured:
@@ -281,7 +281,7 @@ class SociaVaultInstagramProfileProvider(CollectorProvider):
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key)
+        return paid_provider_enabled("sociavault") and bool(self.api_key)
 
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
         if not self.configured:
@@ -381,7 +381,7 @@ class SociaVaultYouTubeProvider(CollectorProvider):
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key)
+        return paid_provider_enabled("sociavault") and bool(self.api_key)
 
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
         if not self.configured:

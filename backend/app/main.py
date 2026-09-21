@@ -7,6 +7,7 @@ import hashlib
 import io
 import hmac
 import json
+import logging
 import os
 import re
 from collections import Counter
@@ -24,12 +25,13 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from app.connectors.reviews import ConnectorUnavailable, normalize_twogis_business_url
 from app.collectors.registry import collector_registry
-from app.connectors.search import DiscoveryService, fan_out
+from app.connectors.search import DiscoveryNotConfigured, DiscoveryService, canonical_url, fan_out
 from app.models import DiscoveryRequest, ExtractedReview, ManualImportRequest, MentionType, MentionUpdate, ProcessedMention, RawItem, ReplyDraftRequest, ReplyStatus, ReviewExtractionRequest, ReviewImportRequest, RiskResult, SourceCreate, SourceOAuthCredential, SourceUpdate
-from app.services.llm import analyze_with_cascade, generate_business_recommendations, generate_reply_draft
+from app.services.llm import analyze_with_cascade, generate_reply_draft
 from app.services.normalization import normalize
 from app.services.review_extraction import ReviewExtractionUnavailable, extract_reviews, review_external_id
 from app.services.risk import calculate
+from app.services.topics import top_topics
 from app.services.telegram import business_from_token, connection_token, send_alert
 from app.services.source_credentials import CredentialEncryptionError, SourceCredentialVault
 from app.security import AuthContext, require_admin_context, require_business_member, require_user
@@ -46,6 +48,8 @@ app.add_middleware(CORSMiddleware, allow_origins=sorted(frontend_origins), allow
 seen_hashes: set[str] = set()
 processed: list[ProcessedMention] = []
 sources: list[dict] = []
+ignored_authors: set[tuple[UUID, str, str]] = set()
+logger = logging.getLogger("sarap.discovery")
 
 
 def _visible_product_mentions(items: list[ProcessedMention]) -> list[ProcessedMention]:
@@ -63,6 +67,9 @@ def _visible_product_mentions(items: list[ProcessedMention]) -> list[ProcessedMe
 
 async def process_item(business_id: UUID, item: RawItem) -> ProcessedMention:
     mention = normalize(item, business_id)
+    author_key = str(mention.metadata.get("author_key") or "")
+    if author_key and ((repository.configured and await repository.author_is_ignored(business_id, mention.source, author_key)) or (business_id, mention.source, author_key) in ignored_authors):
+        mention = mention.model_copy(update={"include_in_analysis": False})
     if repository.configured:
         previous = await repository.find_by_hash(business_id, mention.content_hash)
         if previous:
@@ -194,6 +201,29 @@ async def update_mention(mention_id: UUID, update: MentionUpdate, context: AuthC
     return item
 
 
+@app.post("/api/mentions/{mention_id}/ignore-author", response_model=list[ProcessedMention])
+async def ignore_author(mention_id: UUID, payload: dict = Body(...), context: AuthContext = Depends(require_user)) -> list[ProcessedMention]:
+    item = await repository.get_processed(str(mention_id)) if repository.configured else next((row for row in processed if row.mention.id == mention_id), None)
+    if not item:
+        raise HTTPException(404, "Mention not found")
+    await require_business_member(context, item.mention.business_id)
+    author_key = str(item.mention.metadata.get("author_key") or "").strip()
+    if not author_key:
+        raise HTTPException(422, "This mention has no stable author identifier or author name")
+    ignored = bool(payload.get("ignored", True))
+    if repository.configured:
+        await repository.set_author_ignored(item.mention.business_id, item.mention.source, author_key, ignored)
+        return await repository.list_processed(item.mention.business_id)
+    key = (item.mention.business_id, item.mention.source, author_key)
+    ignored_authors.add(key) if ignored else ignored_authors.discard(key)
+    for row in processed:
+        if row.mention.business_id == key[0] and row.mention.source == key[1] and row.mention.metadata.get("author_key") == key[2]:
+            row.mention = row.mention.model_copy(update={"include_in_analysis": not ignored})
+            if ignored:
+                row.risk = RiskResult(score=0, level="Excluded", reasons=["Ignored author"])
+    return [row for row in processed if row.mention.business_id == item.mention.business_id]
+
+
 @app.post("/api/mentions/{mention_id}/reply", response_model=ProcessedMention)
 async def create_reply_draft(mention_id: UUID, request: ReplyDraftRequest, context: AuthContext = Depends(require_user)) -> ProcessedMention:
     item = await repository.get_processed(str(mention_id)) if repository.configured else next((row for row in processed if row.mention.id == mention_id), None)
@@ -259,9 +289,13 @@ async def analytics(business_id: UUID, days: int = 30, context: AuthContext = De
     start, end = _period_bounds(days)
     rows = [item for item in mentions if item.mention.include_in_analysis and item.mention.collected_at.date() >= start]
     counts = Counter(item.analysis.sentiment for item in rows)
-    stop_words = {"this", "that", "with", "have", "very", "был", "это", "для", "что", "как", "және", "мен", "the", "and"}
-    words = Counter(word.lower() for item in rows for word in re.findall(r"[\wӘәҒғҚқҢңӨөҰұҮүҺһІі]{4,}", item.mention.text) if word.lower() not in stop_words)
-    return {"period_start": start.isoformat(), "period_end": end.isoformat(), "total": len(rows), "positive": counts["positive"], "negative": counts["negative"], "neutral": counts["neutral"] + counts["mixed"], "sentiment": {key: counts[key] for key in ("positive", "negative", "neutral", "mixed")}, "top_keywords": [{"word": word, "count": count} for word, count in words.most_common(10)]}
+    aliases: list[str] = []
+    if repository.configured:
+        business = await repository.request("GET", "businesses", params={"select": "name,aliases", "id": f"eq.{business_id}", "limit": "1"})
+        if business:
+            aliases = [business[0].get("name") or "", *(business[0].get("aliases") or [])]
+    topics = top_topics((item.mention.text for item in rows), aliases)
+    return {"period_start": start.isoformat(), "period_end": end.isoformat(), "total": len(rows), "positive": counts["positive"], "negative": counts["negative"], "neutral": counts["neutral"] + counts["mixed"], "sentiment": {key: counts[key] for key in ("positive", "negative", "neutral", "mixed")}, "top_keywords": [{"word": word, "count": count} for word, count in topics]}
 
 
 @app.get("/api/recommendations")
@@ -270,33 +304,30 @@ async def recommendations(business_id: UUID, days: int = 30, refresh: bool = Fal
     start, end = _period_bounds(days)
     mentions = _visible_product_mentions(await repository.list_processed(business_id) if repository.configured else [x for x in processed if x.mention.business_id == business_id])
     rows = [item for item in mentions if item.mention.include_in_analysis and item.mention.collected_at.date() >= start]
+    industry = "this business"
+    if repository.configured:
+        business_rows = await repository.request("GET", "businesses", params={"select": "industry", "id": f"eq.{business_id}", "limit": "1"})
+        if business_rows and business_rows[0].get("industry"):
+            industry = str(business_rows[0]["industry"])
     if not rows:
         return {
             "business_id": str(business_id),
             "period_start": start.isoformat(),
             "period_end": end.isoformat(),
-            "score": 0,
-            "summary": "Insights will appear after reviews are collected and analyzed.",
+            "score": 0, "summary": "Not enough data yet",
             "recommendations": {"urgent_fix": [], "improve": [], "keep_doing": []},
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
-    if repository.configured and not refresh:
-        try:
-            existing = await repository.get_recommendation(business_id, start.isoformat(), end.isoformat())
-            if existing:
-                return existing
-        except RepositoryUnavailable:
-            pass
-    source = "\n".join(f"{item.analysis.sentiment} | {', '.join(aspect.aspect for aspect in item.analysis.aspects)} | {item.analysis.summary or item.mention.text[:220]}" for item in rows[-50:])
-    payload = await generate_business_recommendations(source)
     aspect_sentiment = Counter((aspect.aspect, aspect.sentiment) for item in rows for aspect in item.analysis.aspects)
-    repeated_negative = [aspect for (aspect, sentiment), count in aspect_sentiment.most_common() if sentiment == "negative" and count >= 2]
-    repeated_positive = [aspect for (aspect, sentiment), count in aspect_sentiment.most_common() if sentiment == "positive" and count >= 2]
-    if not any(payload["recommendations"].values()):
-        payload["recommendations"]["improve"] = [f"Review repeated customer concerns about {aspect}" for aspect in repeated_negative[:3]]
-        payload["recommendations"]["keep_doing"] = [f"Maintain the customer experience around {aspect}" for aspect in repeated_positive[:3]]
-        if not repeated_negative and not repeated_positive:
-            payload["summary"] = "No significant repeated recommendation yet."
+    high_risk = Counter(aspect.aspect for item in rows if item.risk.score >= 60 for aspect in item.analysis.aspects if aspect.sentiment == "negative")
+    urgent = [f"Address {aspect} — {count} high-risk negative mentions" for aspect, count in high_risk.most_common(3) if count >= 2]
+    negative = [(aspect, count) for (aspect, sentiment), count in aspect_sentiment.most_common() if sentiment == "negative" and count >= 2 and aspect not in dict(high_risk)]
+    positive = [(aspect, count) for (aspect, sentiment), count in aspect_sentiment.most_common() if sentiment == "positive" and count >= 2]
+    payload = {"score": 0, "summary": f"Evidence-based themes for {industry} from included mentions." if urgent or negative or positive else "Not enough data yet", "recommendations": {
+        "urgent_fix": urgent,
+        "improve": [f"Improve {aspect} — {count} negative mentions" for aspect, count in negative[:3]],
+        "keep_doing": [f"Keep supporting {aspect} — {count} positive mentions" for aspect, count in positive[:3]],
+    }}
     result = {"business_id": str(business_id), "period_start": start.isoformat(), "period_end": end.isoformat(), "score": payload["score"], "summary": payload["summary"], "recommendations": payload["recommendations"], "generated_at": datetime.now(timezone.utc).isoformat()}
     if repository.configured:
         try:
@@ -496,7 +527,7 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
         return JSONResponse(status_code=502, content={"status": "failed", "source": str(source.get("source", "unknown")), "provider": "registry", "collected": 0, "new": 0, "duplicates": 0, "warnings": [], "error_code": "collection_failed", "message": message, "detail": message})
     if not collection.success:
         if repository.configured:
-            source_status = "setup_required" if collection.error_code == "setup_required" else "error"
+            source_status = collection.error_code if collection.error_code in {"setup_required", "collector_unavailable"} else "error"
             await repository.update_source(source_id, {"status": source_status, "error_message": collection.error_message, "last_checked_at": datetime.now(timezone.utc).isoformat()})
         return JSONResponse(status_code=409, content={
             "status": "failed", "source": collection.source, "provider": collection.provider,
@@ -508,7 +539,8 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
         source["last_seen_item_id"] = items[0].external_id
     source["active_collection_method"] = collection.provider
     if repository.configured:
-        await repository.update_source(source_id, {"last_seen_item_id": source.get("last_seen_item_id"), "active_collection_method": source["active_collection_method"], "last_checked_at": datetime.now(timezone.utc).isoformat(), "status": "active", "error_message": None})
+        success_status = "discovery_monitoring" if collection.provider == "discovery" else ("active" if items else "no_new_items")
+        await repository.update_source(source_id, {"last_seen_item_id": source.get("last_seen_item_id"), "active_collection_method": source["active_collection_method"], "last_checked_at": datetime.now(timezone.utc).isoformat(), "status": success_status, "error_message": None})
     results = [await process_item(UUID(source["business_id"]), item) for item in items]
     duplicates = sum(1 for result in results if result.duplicate)
     payload = {
@@ -562,12 +594,15 @@ async def discover(request: DiscoveryRequest, context: AuthContext = Depends(req
     provider = DiscoveryService()
     try:
         results, provider_status = await asyncio.wait_for(provider.search_many(queries, country="KZ", date_range="30d"), timeout=12)
+    except DiscoveryNotConfigured as exc:
+        raise HTTPException(503, str(exc)) from exc
     except asyncio.TimeoutError as exc:
         raise HTTPException(504, "Internet search timed out. Please try again.") from exc
     brand_terms = [value.casefold().strip() for value in [request.brand_name, *request.aliases] if len(value.strip()) >= 2]
-    unique = {item.url: item for item in results if item.relevance >= .7 and any(term in f"{item.title} {item.snippet}".casefold() for term in brand_terms)}
+    unique = {canonical_url(item.url): item for item in results if any(term in f"{item.title} {item.snippet}".casefold() for term in brand_terms)}
     if repository.configured and unique:
         await repository.request("POST", "web_discoveries", params={"on_conflict": "business_id,url"}, json=[{"business_id": str(request.business_id), "url": x.url, "title": x.title, "snippet": x.snippet, "relevance": x.relevance, **({"discovered_at": x.published_at.isoformat()} if x.published_at else {})} for x in unique.values()], prefer="resolution=merge-duplicates")
+    logger.info("provider=%s query_count=%d raw_count=%d filtered_count=%d saved_count=%d", ",".join(str(x.get("provider")) for x in provider_status), len(queries), len(results), len(unique), len(unique) if repository.configured else 0)
     return {"queries_generated": len(queries), "results": list(unique.values()), "providers": provider_status, "window": "30d"}
 
 
