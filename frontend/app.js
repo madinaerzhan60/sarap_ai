@@ -729,8 +729,33 @@ function analyzeDemo(text,rating) {
 
 document.addEventListener('click', async e => {
   const route=e.target.closest('[data-route]')?.dataset.route; if(route){setRoute(route);return;}
-  const action=e.target.closest('[data-action]')?.dataset.action; if(!action)return;
-  const target=e.target.closest('[data-action]');
+  const actionElem = e.target.closest('[data-action]');
+  const action = actionElem?.dataset.action;
+  if (!action) {
+    // Header filter toggle
+    const headerBtn = e.target.closest('[data-toggle-header-filter]');
+    if (headerBtn) {
+      const key = headerBtn.dataset.toggleHeaderFilter;
+      const menu = document.querySelector(`[data-filter-menu="${key}"]`);
+      document.querySelectorAll('.header-filter-menu').forEach(m => m.classList.add('hidden'));
+      if (menu) menu.classList.toggle('hidden');
+      return;
+    }
+    // Mentions filter popover toggle
+    if (e.target.id === 'mentions-filters-btn') {
+      const pop = document.getElementById('mentions-popover');
+      document.querySelectorAll('.filters-popover').forEach(p => p.classList.add('hidden'));
+      if (pop) pop.classList.toggle('hidden');
+      return;
+    }
+    // Click outside: close any open popovers
+    if (!e.target.closest('.header-filter-menu') && !e.target.closest('.filters-popover') && !e.target.closest('#mentions-filters-btn')) {
+      document.querySelectorAll('.header-filter-menu').forEach(m => m.classList.add('hidden'));
+      document.querySelectorAll('.filters-popover').forEach(p => p.classList.add('hidden'));
+    }
+    return;
+  }
+  const target = actionElem;
   if(['landing','login','register','forgot-password'].includes(action)) setRoute(action);
   if(action==='demo'){state=structuredClone(defaultState);state.session={name:'Demo Founder',email:'demo@sarap.kz',demo:true,verified:true};state.route='overview';saveState();render();}
   if(action==='export-csv')exportMentionsCsv(filteredMentions());
