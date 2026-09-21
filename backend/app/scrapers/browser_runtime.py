@@ -145,14 +145,25 @@ class BrowserManager:
         args = serverless_args or (["--no-sandbox", "--disable-dev-shm-usage"] if _is_serverless() or os.name == "posix" and not Path(mac_chrome).is_file() else [])
         try:
             expected = Path(explicit or playwright.chromium.executable_path)
+
             if not expected.is_file():
-                raise BrowserRuntimeError("chromium_not_installed", f"Chromium executable was not found at {expected}")
+                raise BrowserRuntimeError(
+                    "chromium_not_installed",
+                    f"Chromium executable was not found at {expected}",
+                )
+
+            headless = os.getenv(
+                "PLAYWRIGHT_HEADLESS",
+                "true",
+            ).lower() not in {"false", "0", "no"}
+
             browser = await playwright.chromium.launch(
-                headless=True,
+                headless=headless,
                 proxy=proxy,
                 executable_path=explicit or None,
                 args=args,
             )
+
         except BrowserRuntimeError:
             await playwright.stop()
             raise
