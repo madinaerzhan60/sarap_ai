@@ -276,35 +276,7 @@ const headerFilter=(key,label,values)=>{
     </details>`;
 };
   const sortButton=(label,value)=>{const inverse=value==='newest'?'oldest':value==='risk'?'risk-asc':'rating-low';return `<button class="table-sort" data-mention-sort="${value}">${label}${mentionFilters.sort===value?' ↓':mentionFilters.sort===inverse?' ↑':''}</button>`;};
-  return pageHead('Mentions','Customer feedback and factual AI summaries.',actions)+(all.length?`<div class="table-wrap mentions-table-wrap glass"><table class="mentions-table"><thead><tr><th>Summary</th><th>
-    ${headerFilter('source','Source',[
-  ['all','All sources'],
-  ['2gis','2GIS'],
-  ['google','Google'],
-  ['yandex','Yandex'],
-  ['youtube','YouTube'],
-  ['telegram','Telegram'],
-  ['instagram','Instagram'],
-  ['manual','Manual']
-])}
-
-${headerFilter('type','Type',[
-  ['all','All types'],
-  ['review','Review'],
-  ['comment','Comment'],
-  ['question','Question'],
-  ['post','Post'],
-  ['news','News'],
-  ['other','Other']
-])}
-
-${headerFilter('sentiment','Sentiment',[
-  ['all','All sentiment'],
-  ['positive','Positive'],
-  ['neutral','Neutral'],
-  ['negative','Negative']
-])}
-    <th>${sortButton('Rating','rating-high')}</th><th>${sortButton('Risk','risk')}</th><th>${sortButton('Published date','newest')}</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No matching mentions','Change the filters or import customer feedback.',null,null));
+  return pageHead('Mentions','Customer feedback and factual AI summaries.',actions)+(all.length?`<div class="table-wrap mentions-table-wrap glass"><table class="mentions-table"><thead><tr><th>Summary</th><th>${headerFilter('source','Source',[['all','All sources'],['2gis','2GIS'],['google','Google'],['yandex','Yandex'],['youtube','YouTube'],['telegram','Telegram'],['instagram','Instagram'],['manual','Manual']])}</th><th>${headerFilter('type','Type',[['all','All types'],['review','Review'],['comment','Comment'],['question','Question'],['post','Post'],['news','News'],['other','Other']])}</th><th>${headerFilter('sentiment','Sentiment',[['all','All sentiment'],['positive','Positive'],['neutral','Neutral'],['negative','Negative']])}</th><th>${sortButton('Rating','rating-high')}</th><th>${sortButton('Risk','risk')}</th><th>${sortButton('Published date','newest')}</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No matching mentions','Change the filters or import customer feedback.',null,null));
 }
 
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
