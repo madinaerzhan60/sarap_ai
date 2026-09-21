@@ -214,6 +214,9 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
   font: inherit;
   color: inherit;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: .15s ease;
 }
 
@@ -225,51 +228,192 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
 .table-sort.active {
   background: rgba(18, 93, 76, .1);
   color: #123f35;
+  font-weight: 600;
 }
 
-.table-filter {
+/* Secondary Filters Floating Popover */
+.popover-anchor {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
 }
 
-.table-filter > summary {
-  list-style: none;
-  cursor: pointer;
+.filter-popover-btn.active {
+  background: rgba(30, 143, 133, .12);
+  color: var(--teal-dark);
+  border-color: rgba(30, 143, 133, .28);
+}
+
+.filters-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 200;
+  width: 220px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, .9);
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 16px 38px -10px rgba(27, 30, 39, .2), 0 0 0 1px rgba(27, 30, 39, .05);
+  backdrop-filter: blur(24px);
+}
+
+.popover-title {
+  font: 600 13px "Unbounded", sans-serif;
+  color: var(--ink);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.popover-section {
+  margin-bottom: 12px;
+}
+
+.popover-section:last-of-type {
+  margin-bottom: 8px;
+}
+
+.popover-label {
+  font: 600 10px/1.4 "IBM Plex Mono", monospace;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  margin-bottom: 5px;
+}
+
+.popover-item, .header-filter-menu .menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: 400 12px "IBM Plex Sans", sans-serif;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+
+.popover-item:hover, .header-filter-menu .menu-item:hover {
+  background: rgba(27, 30, 39, .05);
+}
+
+.popover-item.active, .header-filter-menu .menu-item.active {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+  font-weight: 500;
+}
+
+.popover-item .check, .header-filter-menu .menu-item .check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--teal-dark);
+}
+
+.popover-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.popover-clear-btn {
+  width: 100%;
+  padding: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: 500 11px "IBM Plex Sans", sans-serif;
+  cursor: pointer;
+  text-align: center;
+  transition: color .15s ease, background .15s ease;
+}
+
+.popover-clear-btn:hover {
+  color: var(--ink);
+  background: rgba(27, 30, 39, .04);
+}
+
+/* Header filter anchors and menus */
+.th-filter-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.th-filter-btn {
+  background: none;
+  border: none;
+  padding: 6px 8px;
+  margin: 0;
   border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   transition: .15s ease;
+  white-space: nowrap;
 }
 
-.table-filter > summary::-webkit-details-marker {
-  display: none;
-}
-
-.table-filter > summary:hover,
-.table-filter[open] > summary {
+.th-filter-btn:hover {
   background: rgba(18, 93, 76, .07);
   color: #123f35;
 }
 
-.table-filter .mention-filters {
+.th-filter-btn.active {
+  background: rgba(18, 93, 76, .1);
+  color: #123f35;
+  font-weight: 600;
+}
+
+.header-filter-menu {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  z-index: 50;
-  min-width: 170px;
-  padding: 8px;
-  border: 1px solid rgba(0,0,0,.08);
+  z-index: 200;
+  min-width: 180px;
+  max-width: 240px;
+  padding: 6px;
   border-radius: 12px;
-  background: white;
-  box-shadow: 0 12px 35px rgba(0,0,0,.12);
+  border: 1px solid rgba(255, 255, 255, .9);
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 16px 36px -10px rgba(27, 30, 39, .2), 0 0 0 1px rgba(27, 30, 39, .05);
+  backdrop-filter: blur(24px);
 }
 
-.table-filter .mention-filters select {
-  width: 100%;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  padding: 8px;
+/* Table empty row */
+.table-empty-cell {
+  padding: 48px 16px !important;
+  text-align: center;
+}
+
+.table-empty-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.table-empty-text {
+  margin: 0;
   font-size: 14px;
+  color: var(--muted);
+}
+
+.table-empty-actions {
+  display: flex;
+  gap: 8px;
 }
 .mentions-table .review-col { width:33%; }.mentions-table .sentiment-col{width:13%}.mentions-table .confidence-col{width:18%}.mentions-table .summary-col{width:36%}
 .mentions-table thead { background:rgba(242,247,245,.82); }
@@ -399,8 +543,7 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
 @media (max-width:760px){.source-grid,.onboarding-source-actions{grid-template-columns:1fr}}
 
 /* Mention intelligence table */
-.mention-filters{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px}.mention-filters .search{margin-left:auto}
-.mentions-table{min-width:1040px;table-layout:auto}.mentions-table tbody tr{cursor:pointer}.mentions-table td:first-child{min-width:330px}.mentions-table td{font-size:11px}
+.mentions-table tbody tr{cursor:pointer}.mentions-table td{font-size:12px}
 .mention-detail-text{padding:15px;margin-bottom:14px;border-radius:12px;background:rgba(255,255,255,.55);font-size:13px;line-height:1.6}
 .detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}.detail-grid>div{padding:10px;border-radius:10px;background:rgba(255,255,255,.45)}.detail-grid span,.detail-grid strong{display:block}.detail-grid span{color:var(--muted);font-size:9px}.detail-grid strong{margin-top:3px;font-size:11px}.reply-editor{min-height:180px!important}
 @media(max-width:760px){.detail-grid{grid-template-columns:1fr 1fr}.mention-filters .filter{flex:1 1 44%}}

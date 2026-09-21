@@ -202,10 +202,9 @@ function mentionCard(m) {
   return `<article class="mention-card glass" data-mention="${m.id}"><div class="mention-top"><div class="source-icon">${sourceIcon(m.source)}</div><div class="mention-meta"><strong>${escapeHtml(m.source)} · ${escapeHtml(m.author||'Unknown author')}</strong><small>${escapeHtml(m.time)} · ${escapeHtml(m.language||'Unknown language')}</small></div><span class="risk-pill ${m.risk<30?'low':''}">RISK ${m.risk}</span></div><p class="mention-text">${escapeHtml(m.text)}</p><div class="tags">${m.aspects.map(([a,s])=>`<span class="tag ${s}">${escapeHtml(a)} · ${s==='pos'?'Positive':s==='neg'?'Negative':'Neutral'}</span>`).join('')}<span class="tag">${escapeHtml(m.sentiment||'neutral')}</span><span class="tag">${escapeHtml(m.language||'Unknown')}</span></div><div class="mention-actions"><button class="btn btn-quiet" data-action="reply" data-id="${m.id}">Generate reply</button><button class="btn btn-quiet" data-action="review" data-id="${m.id}">${m.reviewed?'Reviewed ✓':'Mark reviewed'}</button><button class="btn btn-quiet" data-action="escalate" data-id="${m.id}">Escalate</button></div></article>`;
 }
 
-let mentionSentimentFilter='all';
 function exportMentionsCsv(items){
   const header=['Review','Sentiment','Confidence','Summary'];
-  const csv=[header,...items.map(item=>[item.text,item.sentiment,`${Math.round(item.confidence*100)}%`,item.summary])].map(row=>row.map(value=>`"${String(value||'').replaceAll('"','""')}"`).join(',')).join('\n');
+  const csv=[header,...items.map(item=>[item.text||'',item.sentiment||'',item.confidence!=null?`${Math.round(item.confidence*100)}%`:'—',item.summary||meaningfulMentionSummary(item)])].map(row=>row.map(value=>`"${String(value||'').replaceAll('"','""')}"`).join(',')).join('\n');
   const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));link.download='sarap-mentions.csv';link.click();URL.revokeObjectURL(link.href);
 }
 function fallbackMentionSummary(item){
@@ -242,41 +241,147 @@ function mentionTableRow(item){
     <td>${item.rating==null?'—':`${item.rating}/5`}</td><td><span class="risk-pill ${item.risk<30?'low':''}">${item.risk}</span></td><td>${escapeHtml(published)}</td>
   </tr>`;
 }
-const mentionFilters={source:'all',type:'all',sentiment:'all',analysis:'all',reply:'all',date:'all',sort:'newest'};
+const mentionFilters={search:'',source:'all',type:'all',sentiment:'all',analysis:'all',reply:'all',date:'all',sort:'newest'};
 function filteredMentions(){
   const cutoff=mentionFilters.date==='all'?null:Date.now()-Number(mentionFilters.date)*86400000;
-  const rows=state.mentions.filter(item=>{
-    const sourceOk=mentionFilters.source==='all'||item.source.toLowerCase().includes(mentionFilters.source);
-    const typeOk=mentionFilters.type==='all'||item.contentType===mentionFilters.type;
-    const sentimentOk=mentionFilters.sentiment==='all'||item.sentiment===mentionFilters.sentiment;
-    const analysisOk=mentionFilters.analysis==='all'||(mentionFilters.analysis==='included')===item.includeInAnalysis;
-    const replyOk=mentionFilters.reply==='all'||(mentionFilters.reply==='answered'?item.replyStatus==='answered':item.replyStatus!=='answered');
-    const dateOk=!cutoff||new Date(item.publishedAt||item.collectedAt).getTime()>=cutoff;
-    return sourceOk&&typeOk&&sentimentOk&&analysisOk&&replyOk&&dateOk;
+  const q=(mentionFilters.search||'').trim().toLowerCase();
+  const rows=(state.mentions||[]).filter(item=>{
+    if(!item)return false;
+    const sourceStr=String(item.source||'').toLowerCase();
+    const sourceOk=mentionFilters.source==='all'||sourceStr.includes(mentionFilters.source.toLowerCase());
+
+    const typeStr=String(item.contentType||item.type||item.source_type||'').toLowerCase();
+    let typeOk=mentionFilters.type==='all';
+    if(!typeOk){
+      const target=mentionFilters.type.toLowerCase();
+      if(target==='review')typeOk=typeStr.includes('review');
+      else if(target==='comment')typeOk=typeStr.includes('comment');
+      else if(target==='question')typeOk=typeStr.includes('question');
+      else if(target==='post')typeOk=typeStr.includes('post')||typeStr.includes('social');
+      else if(target==='news')typeOk=typeStr.includes('news');
+      else if(target==='other')typeOk=!['review','comment','question','post','news'].some(t=>typeStr.includes(t));
+      else typeOk=typeStr.includes(target);
+    }
+
+    const sentStr=String(item.sentiment||'').toLowerCase();
+    const sentimentOk=mentionFilters.sentiment==='all'||sentStr===mentionFilters.sentiment.toLowerCase();
+
+    const isIncluded=item.includeInAnalysis!==false&&!item.ignored;
+    const analysisOk=mentionFilters.analysis==='all'||
+      (mentionFilters.analysis==='included'&&isIncluded)||
+      ((mentionFilters.analysis==='ignored'||mentionFilters.analysis==='excluded')&&!isIncluded);
+
+    const isAnswered=item.replyStatus==='answered'||item.reviewed===true||item.replied===true;
+    const replyOk=mentionFilters.reply==='all'||
+      (mentionFilters.reply==='answered'&&isAnswered)||
+      (mentionFilters.reply==='unanswered'&&!isAnswered);
+
+    let dateOk=true;
+    if(cutoff){
+      const itemTime=item.publishedAt||item.collectedAt?new Date(item.publishedAt||item.collectedAt).getTime():0;
+      dateOk=!itemTime||itemTime>=cutoff;
+    }
+
+    let searchOk=true;
+    if(q){
+      const summaryText=meaningfulMentionSummary(item).toLowerCase();
+      const text=String(item.text||'').toLowerCase();
+      const author=String(item.author||'').toLowerCase();
+      const src=sourceStr;
+      searchOk=text.includes(q)||author.includes(q)||src.includes(q)||summaryText.includes(q);
+    }
+
+    return sourceOk&&typeOk&&sentimentOk&&analysisOk&&replyOk&&dateOk&&searchOk;
   });
-  return rows.sort((a,b)=>mentionFilters.sort==='oldest'?new Date(a.publishedAt||a.collectedAt)-new Date(b.publishedAt||b.collectedAt):mentionFilters.sort==='risk'?b.risk-a.risk:mentionFilters.sort==='risk-asc'?a.risk-b.risk:mentionFilters.sort==='rating-low'?(a.rating??6)-(b.rating??6):mentionFilters.sort==='rating-high'?(b.rating??-1)-(a.rating??-1):new Date(b.publishedAt||b.collectedAt)-new Date(a.publishedAt||a.collectedAt));
+
+  return rows.sort((a,b)=>{
+    const timeA=new Date(a.publishedAt||a.collectedAt||0).getTime();
+    const timeB=new Date(b.publishedAt||b.collectedAt||0).getTime();
+    if(mentionFilters.sort==='oldest')return timeA-timeB;
+    if(mentionFilters.sort==='risk')return (b.risk??0)-(a.risk??0);
+    if(mentionFilters.sort==='risk-asc')return (a.risk??0)-(b.risk??0);
+    if(mentionFilters.sort==='rating-high')return (b.rating??-1)-(a.rating??-1);
+    if(mentionFilters.sort==='rating-low')return (a.rating??6)-(b.rating??6);
+    return timeB-timeA;
+  });
 }
+
 function mentions(){
   const all=filteredMentions();
-  const options=(values,current)=>values.map(([value,label])=>`<option value="${value}" ${current===value?'selected':''}>${label}</option>`).join('');
+  const totalInWorkspace=(state.mentions||[]).length;
   const activeSecondary=[mentionFilters.analysis,mentionFilters.reply,mentionFilters.date].filter(x=>x!=='all').length;
-  const actions=`<input class="search" id="mention-search" type="search" placeholder="Search mentions…"><details class="filter-menu"><summary class="btn btn-secondary">Filters${activeSecondary?` (${activeSecondary})`:''}</summary><div class="mention-filters"><select class="filter" data-mention-filter="analysis">${options([['all','Included and ignored'],['included','Included'],['excluded','Ignored']],mentionFilters.analysis)}</select><select class="filter" data-mention-filter="reply">${options([['all','Answered and unanswered'],['answered','Answered'],['unanswered','Unanswered']],mentionFilters.reply)}</select><select class="filter" data-mention-filter="date">${options([['all','Any date'],['7','Last 7 days'],['30','Last 30 days'],['90','Last 90 days']],mentionFilters.date)}</select></div></details><button class="btn btn-secondary" data-action="export-csv">Export CSV</button><button class="btn btn-primary" data-action="manual-import">+ Manual import</button>`;
-const headerFilter=(key,label,values)=>{
-  const active=mentionFilters[key]!=='all';
-  return `
-    <details class="filter-menu table-filter">
-      <summary class="table-sort ${active?'active':''}">
-        ${label}${active?' •':''} ▾
-      </summary>
-      <div class="mention-filters">
-        <select data-mention-filter="${key}">
-          ${options(values,mentionFilters[key])}
-        </select>
-      </div>
-    </details>`;
-};
-  const sortButton=(label,value)=>{const inverse=value==='newest'?'oldest':value==='risk'?'risk-asc':'rating-low';return `<button class="table-sort" data-mention-sort="${value}">${label}${mentionFilters.sort===value?' ↓':mentionFilters.sort===inverse?' ↑':''}</button>`;};
-  return pageHead('Mentions','Customer feedback and factual AI summaries.',actions)+(all.length?`<div class="table-wrap mentions-table-wrap glass"><table class="mentions-table"><thead><tr><th>Summary</th><th>${headerFilter('source','Source',[['all','All sources'],['2gis','2GIS'],['google','Google'],['yandex','Yandex'],['youtube','YouTube'],['telegram','Telegram'],['instagram','Instagram'],['manual','Manual']])}</th><th>${headerFilter('type','Type',[['all','All types'],['review','Review'],['comment','Comment'],['question','Question'],['post','Post'],['news','News'],['other','Other']])}</th><th>${headerFilter('sentiment','Sentiment',[['all','All sentiment'],['positive','Positive'],['neutral','Neutral'],['negative','Negative']])}</th><th>${sortButton('Rating','rating-high')}</th><th>${sortButton('Risk','risk')}</th><th>${sortButton('Published date','newest')}</th></tr></thead><tbody id="mention-list">${all.map(mentionTableRow).join('')}</tbody></table></div>`:emptyState('No matching mentions','Change the filters or import customer feedback.',null,null));
+
+  const actions=`<input class="search" id="mention-search" type="search" placeholder="Search mentions…" value="${escapeHtml(mentionFilters.search||'')}"><div class="popover-anchor" id="filters-popover-anchor"><button class="btn btn-secondary filter-popover-btn ${activeSecondary?'active':''}" type="button" id="mentions-filters-btn" aria-haspopup="dialog" aria-expanded="false">Filters${activeSecondary?` (${activeSecondary})`:''}</button><div class="filters-popover glass hidden" id="mentions-popover" role="dialog" aria-label="Secondary filters"><div class="popover-title">Filters</div><div class="popover-section"><div class="popover-label">Analysis</div><button type="button" class="popover-item ${mentionFilters.analysis==='all'?'active':''}" data-mention-filter="analysis" data-value="all"><span class="check">${mentionFilters.analysis==='all'?'✓':''}</span> All</button><button type="button" class="popover-item ${mentionFilters.analysis==='included'?'active':''}" data-mention-filter="analysis" data-value="included"><span class="check">${mentionFilters.analysis==='included'?'✓':''}</span> Included</button><button type="button" class="popover-item ${mentionFilters.analysis==='ignored'?'active':''}" data-mention-filter="analysis" data-value="ignored"><span class="check">${mentionFilters.analysis==='ignored'?'✓':''}</span> Ignored</button></div><div class="popover-section"><div class="popover-label">Reply status</div><button type="button" class="popover-item ${mentionFilters.reply==='all'?'active':''}" data-mention-filter="reply" data-value="all"><span class="check">${mentionFilters.reply==='all'?'✓':''}</span> All</button><button type="button" class="popover-item ${mentionFilters.reply==='answered'?'active':''}" data-mention-filter="reply" data-value="answered"><span class="check">${mentionFilters.reply==='answered'?'✓':''}</span> Answered</button><button type="button" class="popover-item ${mentionFilters.reply==='unanswered'?'active':''}" data-mention-filter="reply" data-value="unanswered"><span class="check">${mentionFilters.reply==='unanswered'?'✓':''}</span> Unanswered</button></div><div class="popover-section"><div class="popover-label">Date</div><button type="button" class="popover-item ${mentionFilters.date==='all'?'active':''}" data-mention-filter="date" data-value="all"><span class="check">${mentionFilters.date==='all'?'✓':''}</span> Any date</button><button type="button" class="popover-item ${mentionFilters.date==='7'?'active':''}" data-mention-filter="date" data-value="7"><span class="check">${mentionFilters.date==='7'?'✓':''}</span> Last 7 days</button><button type="button" class="popover-item ${mentionFilters.date==='30'?'active':''}" data-mention-filter="date" data-value="30"><span class="check">${mentionFilters.date==='30'?'✓':''}</span> Last 30 days</button><button type="button" class="popover-item ${mentionFilters.date==='90'?'active':''}" data-mention-filter="date" data-value="90"><span class="check">${mentionFilters.date==='90'?'✓':''}</span> Last 90 days</button></div><div class="popover-footer"><button type="button" class="popover-clear-btn" data-action="clear-secondary-filters">Clear filters</button></div></div></div><button class="btn btn-secondary" data-action="export-csv" type="button">Export CSV</button><button class="btn btn-primary" data-action="manual-import" type="button">+ Manual import</button>`;
+
+  const headerFilter=(key,label,values)=>{
+    const active=mentionFilters[key]!=='all';
+    return `
+      <div class="th-filter-anchor">
+        <button type="button" class="th-filter-btn ${active?'active':''}" data-toggle-header-filter="${key}">
+          ${label}${active?' •':''} ▾
+        </button>
+        <div class="header-filter-menu glass hidden" data-filter-menu="${key}">
+          ${values.map(([val,text])=>{
+            const isSelected=mentionFilters[key]===val;
+            return `<button type="button" class="menu-item ${isSelected?'active':''}" data-mention-filter="${key}" data-value="${val}"><span class="check">${isSelected?'✓':''}</span><span>${text}</span></button>`;
+          }).join('')}
+        </div>
+      </div>`;
+  };
+
+  const sortButton=(label,value)=>{
+    let arrow='↕';
+    let active=false;
+    if(value==='rating'){
+      if(mentionFilters.sort==='rating-high'){arrow='↓';active=true;}
+      else if(mentionFilters.sort==='rating-low'){arrow='↑';active=true;}
+    } else if(value==='risk'){
+      if(mentionFilters.sort==='risk'){arrow='↓';active=true;}
+      else if(mentionFilters.sort==='risk-asc'){arrow='↑';active=true;}
+    } else if(value==='newest'||value==='date'){
+      if(mentionFilters.sort==='oldest'){arrow='↑';active=true;}
+      else{arrow='↓';active=mentionFilters.sort==='newest';}
+    }
+    return `<button type="button" class="table-sort ${active?'active':''}" data-mention-sort="${value}">${label} ${arrow}</button>`;
+  };
+
+  if(totalInWorkspace===0){
+    return pageHead('Mentions','Customer feedback and factual AI summaries.',actions)+emptyState('No matching mentions','Change the filters or import customer feedback.',null,null);
+  }
+
+  let tableContent='';
+  if(all.length>0){
+    tableContent=all.map(mentionTableRow).join('');
+  } else {
+    const hasSearch=Boolean((mentionFilters.search||'').trim());
+    const hasFilters=['source','type','sentiment','analysis','reply','date'].some(k=>mentionFilters[k]!=='all');
+    const emptyMsg=hasSearch&&hasFilters
+      ?'No mentions match your search and filters.'
+      :hasSearch
+        ?'No mentions match your search.'
+        :'No mentions match these filters.';
+    const clearSearchBtn=hasSearch?'<button type="button" class="btn btn-quiet" data-action="clear-search">Clear search</button> ':'';
+    const clearFiltersBtn=hasFilters?'<button type="button" class="btn btn-quiet" data-action="clear-filters">Clear filters</button>':'';
+    tableContent=`<tr><td colspan="7" class="table-empty-cell"><div class="table-empty-box"><p class="table-empty-text">${emptyMsg}</p><div class="table-empty-actions">${clearSearchBtn}${clearFiltersBtn}</div></div></td></tr>`;
+  }
+
+  return pageHead('Mentions','Customer feedback and factual AI summaries.',actions)+
+    `<div class="table-wrap mentions-table-wrap glass">
+      <table class="mentions-table">
+        <thead>
+          <tr>
+            <th>Summary</th>
+            <th>${headerFilter('source','Source',[['all','Any source'],['2gis','2GIS'],['google','Google'],['yandex','Yandex'],['youtube','YouTube'],['telegram','Telegram'],['instagram','Instagram'],['manual','Manual']])}</th>
+            <th>${headerFilter('type','Type',[['all','Any type'],['review','Review'],['comment','Comment'],['question','Question'],['post','Post'],['news','News'],['other','Other']])}</th>
+            <th>${headerFilter('sentiment','Sentiment',[['all','Any sentiment'],['positive','Positive'],['neutral','Neutral'],['negative','Negative']])}</th>
+            <th>${sortButton('Rating','rating')}</th>
+            <th>${sortButton('Risk','risk')}</th>
+            <th>${sortButton('Published date','newest')}</th>
+          </tr>
+        </thead>
+        <tbody id="mention-list">${tableContent}</tbody>
+      </table>
+    </div>`;
 }
 
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
@@ -628,7 +733,10 @@ document.addEventListener('click', async e => {
   const target=e.target.closest('[data-action]');
   if(['landing','login','register','forgot-password'].includes(action)) setRoute(action);
   if(action==='demo'){state=structuredClone(defaultState);state.session={name:'Demo Founder',email:'demo@sarap.kz',demo:true,verified:true};state.route='overview';saveState();render();}
-  if(action==='export-csv')exportMentionsCsv(state.mentions.filter(item=>mentionSentimentFilter==='all'||item.sentiment===mentionSentimentFilter));
+  if(action==='export-csv')exportMentionsCsv(filteredMentions());
+  if(action==='clear-filters'){mentionFilters.source='all';mentionFilters.type='all';mentionFilters.sentiment='all';mentionFilters.analysis='all';mentionFilters.reply='all';mentionFilters.date='all';render();return;}
+  if(action==='clear-secondary-filters'){mentionFilters.analysis='all';mentionFilters.reply='all';mentionFilters.date='all';render();return;}
+  if(action==='clear-search'){mentionFilters.search='';const searchInp=document.querySelector('#mention-search');if(searchInp)searchInp.value='';render();return;}
   if(action==='refresh-recommendations'){target.disabled=true;await loadAnalyticsData(true);target.disabled=false;}
   if(action==='logout'){if(!state.session?.demo)await signOut();state.session=null;state.pendingEmail='';state.route='landing';saveState();render();}
   if(action==='resend-confirmation'){
