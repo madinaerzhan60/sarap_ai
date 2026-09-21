@@ -196,6 +196,81 @@ a { color: inherit; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: var(--muted); text-align: left; font-weight: 500; } th, td { padding: 13px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; } tr:last-child td { border-bottom: 0; }
 .mentions-table-wrap { border:1px solid rgba(255,255,255,.88); background:rgba(255,255,255,.46); box-shadow:var(--shadow); }
 .mentions-table { min-width:900px; table-layout:fixed; }
+.mentions-table thead th {
+  padding: 18px 20px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #69737d;
+  white-space: nowrap;
+}
+
+.table-sort {
+  border: 0;
+  background: transparent;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: .15s ease;
+}
+
+.table-sort:hover {
+  background: rgba(18, 93, 76, .07);
+  color: #123f35;
+}
+
+.table-sort.active {
+  background: rgba(18, 93, 76, .1);
+  color: #123f35;
+}
+
+.table-filter {
+  position: relative;
+  display: inline-block;
+}
+
+.table-filter > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 8px;
+  transition: .15s ease;
+}
+
+.table-filter > summary::-webkit-details-marker {
+  display: none;
+}
+
+.table-filter > summary:hover,
+.table-filter[open] > summary {
+  background: rgba(18, 93, 76, .07);
+  color: #123f35;
+}
+
+.table-filter .mention-filters {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  min-width: 170px;
+  padding: 8px;
+  border: 1px solid rgba(0,0,0,.08);
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 12px 35px rgba(0,0,0,.12);
+}
+
+.table-filter .mention-filters select {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 8px;
+  font-size: 14px;
+}
 .mentions-table .review-col { width:33%; }.mentions-table .sentiment-col{width:13%}.mentions-table .confidence-col{width:18%}.mentions-table .summary-col{width:36%}
 .mentions-table thead { background:rgba(242,247,245,.82); }
 .mentions-table th { padding:14px 16px; color:#7a808c; font:500 9px "IBM Plex Mono",monospace; letter-spacing:.09em; text-transform:uppercase; }

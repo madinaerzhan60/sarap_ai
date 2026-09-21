@@ -9,7 +9,7 @@ const app = document.querySelector('#app');
 const storeKey = 'sarap-mvp-state-v1';
 
 async function loadPublicConfig() {
-  if (location.protocol === 'file:') return;
+  if (location.protocol === 'file:') return; 
   if (window.SARAP_CONFIG?.SUPABASE_URL && window.SARAP_CONFIG?.SUPABASE_ANON_KEY) return;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2500);
@@ -18,6 +18,10 @@ async function loadPublicConfig() {
     if (response.ok) {
       const remote = await response.json();
       const configured = Object.fromEntries(Object.entries(remote).filter(([, value]) => value !== '' && value != null));
+      window.SARAP_CONFIG = {
+  ...(window.SARAP_CONFIG || {}),
+  ...configured
+};
     }
   } catch { /* Local standalone demo keeps blank config and uses demo auth. */ }
   finally { clearTimeout(timeout); }
