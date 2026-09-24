@@ -145,12 +145,24 @@ class CollectorRegistry:
         mode = str(source.get("collection_mode", "auto"))
         use_worker = bool(os.getenv("COLLECTOR_WORKER_URL", "").strip())
         if source_type in {SourceType.TWO_GIS, SourceType.YANDEX_MAPS}:
-            if not use_worker:
-                raise ConnectorUnavailable(f"collector_unavailable: {source_type.value} requires COLLECTOR_WORKER_URL")
-            from app.connectors.worker import ExternalWorkerConnector
-            if not page_url:
-                raise ConnectorUnavailable(f"{source_type.value} collection requires a public URL")
-            return source_type, ExternalWorkerConnector(source_type.value, page_url)
+            # Provider selection via environment variable (default to direct)
+            if source_type == SourceType.TWO_GIS:
+                env_var = "TWOGIS_PROVIDER"
+            elif source_type == SourceType.YANDEX_MAPS:
+                env_var = "YANDEX_PROVIDER"
+            else:
+                env_var = f"{source_type.value.upper().replace('_', '')}_PROVIDER"
+            provider_key = os.getenv(env_var, "direct").strip().lower()
+            from app.connectors.reviews import TwoGisPlaywrightConnector, MapFallbackConnector
+            # New Bright Data provider
+            if provider_key == "brightdata":
+                from app.connectors.brightdata_twogis import BrightDataTwoGisConnector
+                return source_type, BrightDataTwoGisConnector(page_url, business_id)
+            elif provider_key == "direct":
+                return source_type, TwoGisPlaywrightConnector(page_url, business_id)
+            else:
+                # Use fallback pipeline which can include Apify, Scrapfly, etc.
+                return source_type, MapFallbackConnector(source_type.value, page_url, business_id)
         if source_type in {SourceType.GOOGLE_BUSINESS, SourceType.GOOGLE_MAPS}:
             if credentials and mode in {"auto", "api"}:
                 return SourceType.GOOGLE_BUSINESS, GoogleBusinessReviewsConnector(
@@ -165,16 +177,17 @@ class CollectorRegistry:
                 raise ConnectorUnavailable("Google Maps fallback requires a public Google Maps business URL")
             return SourceType.GOOGLE_MAPS, MapFallbackConnector("google_maps", page_url, business_id)
         if source_type == SourceType.INSTAGRAM:
-            if credentials and mode in {"auto", "api"}:
-                return source_type, InstagramGraphCommentsConnector(
-                    credentials.get("access_token", ""), credentials.get("instagram_user_id"), credentials.get("media_id")
-                )
-            if mode == "api":
-                raise ConnectorUnavailable("Instagram OAuth is not connected for this workspace source")
-            if not page_url:
-                raise ConnectorUnavailable("Instagram collection requires a public profile, post or reel URL")
+            # Provider selection via environment variable (default to direct)
+            env_var = f"{source_type.value.upper().replace('_', '')}_PROVIDER"
+            provider_key = os.getenv(env_var, "direct").strip().lower()
+            from app.connectors.reviews import InstagramFallbackConnector
             from app.connectors.discovery import PublicDiscoveryConnector
-            return source_type, PublicDiscoveryConnector("instagram", page_url)
+            if provider_key == "direct":
+                # Direct public discovery
+                return source_type, PublicDiscoveryConnector("instagram", page_url)
+            else:
+                # Use fallback pipeline (Playwright, SociaVault, SocialCrawl, Apify)
+                return source_type, InstagramFallbackConnector(page_url, business_id)
         if source_type == SourceType.YOUTUBE:
             if not page_url:
                 raise ConnectorUnavailable("YouTube collection requires a public video or channel URL")

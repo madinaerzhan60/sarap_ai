@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 from supabase import Client, create_client
 
-from app.scrapers.models import ScrapedItem
+from app.scrapers.models import ScrapedItem, review_fingerprint
 
 
 class SupabaseRawReviewStore:
@@ -14,6 +14,51 @@ class SupabaseRawReviewStore:
             raise ValueError("Supabase URL, service role key and business ID are required")
         self.client: Client = create_client(url, service_role_key)
         self.business_id = business_id
+
+    async def existing_fingerprints(
+        self,
+        source: str,
+        page_size: int = 1000,
+    ) -> set[str]:
+        def fetch() -> set[str]:
+            fingerprints: set[str] = set()
+            start = 0
+
+            while True:
+                response = (
+                    self.client.table("raw_reviews")
+                    .select("source,author,text_content,rating")
+                    .eq("business_id", self.business_id)
+                    .eq("source", source)
+                    .range(start, start + page_size - 1)
+                    .execute()
+                )
+
+                rows = response.data or []
+
+                for row in rows:
+                    text_content = str(row.get("text_content") or "").strip()
+
+                    if not text_content:
+                        continue
+
+                    fingerprints.add(
+                        review_fingerprint(
+                            str(row.get("source") or source),
+                            str(row.get("author") or "Unknown"),
+                            text_content,
+                            row.get("rating"),
+                        )
+                    )
+
+                if len(rows) < page_size:
+                    break
+
+                start += page_size
+
+            return fingerprints
+
+        return await asyncio.to_thread(fetch)
 
     async def save(self, items: Sequence[ScrapedItem], batch_size: int = 100) -> int:
         saved = 0

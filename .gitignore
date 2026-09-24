@@ -20,3 +20,5 @@ node_modules/
 # Generated data
 exports/
 logs/
+.vercel
+.env*

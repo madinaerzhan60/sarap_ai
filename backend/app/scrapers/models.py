@@ -24,6 +24,27 @@ def detect_language(text: str) -> str:
     return "en" if latin else "unknown"
 
 
+def review_fingerprint(
+    source: str,
+    author: str,
+    text_content: str,
+    rating: float | None,
+) -> str:
+    normalized_source = re.sub(r"\s+", " ", source).strip().casefold()
+    normalized_author = re.sub(r"\s+", " ", author).strip().casefold()
+    normalized_text = re.sub(r"\s+", " ", text_content).strip().casefold()
+    normalized_rating = "" if rating is None else f"{float(rating):g}"
+
+    payload = (
+        f"{normalized_source}|"
+        f"{normalized_author}|"
+        f"{normalized_text}|"
+        f"{normalized_rating}"
+    )
+
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 class ScrapedItem(BaseModel):
     source: str
     author: str = "Unknown"
@@ -40,6 +61,14 @@ class ScrapedItem(BaseModel):
     @classmethod
     def normalize_space(cls, value: str) -> str:
         return re.sub(r"\s+", " ", value).strip()
+
+    def content_fingerprint(self) -> str:
+        return review_fingerprint(
+            self.source,
+            self.author,
+            self.text_content,
+            self.rating,
+        )
 
     def stable_id(self) -> str:
         if self.external_id:

@@ -235,10 +235,10 @@ class PlaywrightMapScraper(BaseScraper):
 
         stagnant_attempts = 0
         previous_count = 0
-        items: list[ScrapedItem] = []
+        collected: dict[str, ScrapedItem] = {}
 
         for _ in range(max_scrolls):
-            items = extract_map_items(
+            visible_items = extract_map_items(
                 await page.content(),
                 self.profile,
                 query,
@@ -246,7 +246,10 @@ class PlaywrightMapScraper(BaseScraper):
                 "playwright",
             )
 
-            unique_count = len({item.stable_id() for item in items})
+            for item in visible_items:
+                collected[item.content_fingerprint()] = item
+
+            unique_count = len(collected)
 
             if unique_count >= limit:
                 break
@@ -273,13 +276,18 @@ class PlaywrightMapScraper(BaseScraper):
                 int(os.getenv("PLAYWRIGHT_SCROLL_WAIT_MS", "900"))
             )
 
-        items = extract_map_items(
+        visible_items = extract_map_items(
             await page.content(),
             self.profile,
             query,
             limit,
             "playwright",
         )
+
+        for item in visible_items:
+            collected[item.content_fingerprint()] = item
+
+        items = list(collected.values())[:limit]
 
         if not items:
             final_text = (await page.locator("body").inner_text()).casefold()
