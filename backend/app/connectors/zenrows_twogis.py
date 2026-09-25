@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+from html.parser import HTMLParser
 
 import httpx
 
@@ -10,6 +13,10 @@ from app.connectors.base import BaseConnector
 from app.connectors.reviews import extract_reviews_from_html, normalize_twogis_business_url
 from app.models import ConnectionType, RawItem
 from app.scrapers.fallback import ProviderError, ProviderNotConfigured
+
+logger = logging.getLogger(__name__)
+
+TWOGIS_REVIEW_CARD_SELECTOR = "div._1rowqpjv"
 
 
 class ZenRowsTwoGisConnector(BaseConnector):
@@ -34,6 +41,7 @@ class ZenRowsTwoGisConnector(BaseConnector):
             "apikey": api_key,
             "js_render": "true",
             "premium_proxy": "true",
+            "js_instructions": json.dumps(_zenrows_js_instructions()),
         }
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
@@ -48,7 +56,28 @@ class ZenRowsTwoGisConnector(BaseConnector):
         content_type = response.headers.get("content-type", "")
         if "text/html" not in content_type and not _looks_like_html(html):
             raise ProviderError(f"zenrows: unexpected content type {content_type}")
-        if _looks_blocked(html):
+        final_url = str(getattr(response, "url", "")) or response.headers.get("zr-final-url", "")
+        blocked = _looks_blocked(html, final_url)
+        diagnostics = diagnose_zenrows_twogis_response(
+            html,
+            status_code=response.status_code,
+            content_type=content_type,
+            final_url=final_url,
+            scroll_count=_scroll_count(),
+            blocked=blocked,
+        )
+        logger.info(
+            "zenrows_twogis status=%s final_url=%s content_type=%s body_size=%s scrolls=%s review_elements=%s blocked=%s title=%s",
+            diagnostics["status_code"],
+            diagnostics["final_url"],
+            diagnostics["content_type"],
+            diagnostics["body_size"],
+            diagnostics["scroll_count"],
+            diagnostics["review_selector_count"],
+            diagnostics["blocked"],
+            diagnostics["title"],
+        )
+        if blocked:
             raise ProviderError("zenrows: blocked or captcha response")
 
         items = extract_reviews_from_html(html, self.page_url, self.source)
@@ -64,6 +93,37 @@ class ZenRowsTwoGisConnector(BaseConnector):
         return items
 
 
+def _scroll_count() -> int:
+    raw = os.getenv("TWOGIS_ZENROWS_SCROLLS", "5").strip()
+    try:
+        return max(0, min(int(raw), 25))
+    except ValueError:
+        return 5
+
+
+def _zenrows_js_instructions() -> list[dict[str, str | int]]:
+    wait_ms = int(os.getenv("PLAYWRIGHT_SCROLL_WAIT_MS", "900"))
+    instructions: list[dict[str, str | int]] = [{"wait": 3000}]
+    scroll_script = """
+const cards = document.querySelectorAll('div._1rowqpjv');
+if (cards.length) {
+  cards[cards.length - 1].scrollIntoView({block: 'end'});
+} else {
+  const candidates = Array.from(document.querySelectorAll('main, [data-scroll="true"], div'))
+    .filter((el) => el.scrollHeight > el.clientHeight + 200)
+    .sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+  if (candidates[0]) {
+    candidates[0].scrollTop += 1400;
+  }
+  window.scrollBy(0, 1400);
+}
+""".strip()
+    for _ in range(_scroll_count()):
+        instructions.append({"evaluate": scroll_script})
+        instructions.append({"wait": wait_ms})
+    return instructions
+
+
 def _looks_like_html(html: str) -> bool:
     normalized = html.lstrip().lower()
     return (
@@ -73,16 +133,104 @@ def _looks_like_html(html: str) -> bool:
     )
 
 
-def _looks_blocked(html: str) -> bool:
-    normalized = html.lower()
+class _DiagnosticHtmlParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.in_title = False
+        self.title_parts: list[str] = []
+        self.review_selector_count = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "title":
+            self.in_title = True
+        if tag.lower() == "div":
+            values = {key.lower(): value or "" for key, value in attrs}
+            classes = values.get("class", "").split()
+            if "_1rowqpjv" in classes:
+                self.review_selector_count += 1
+
+    def handle_data(self, data: str) -> None:
+        if self.in_title and data.strip():
+            self.title_parts.append(data.strip())
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "title":
+            self.in_title = False
+
+    @property
+    def title(self) -> str:
+        return " ".join(" ".join(self.title_parts).split())
+
+
+def diagnose_zenrows_twogis_response(
+    html: str,
+    *,
+    status_code: int | None = None,
+    content_type: str = "",
+    final_url: str = "",
+    scroll_count: int | None = None,
+    blocked: bool | None = None,
+) -> dict[str, object]:
+    parser = _DiagnosticHtmlParser()
+    parser.feed(html)
+    return {
+        "status_code": status_code,
+        "final_url": final_url,
+        "content_type": content_type,
+        "body_size": len(html.encode("utf-8")),
+        "scroll_count": _scroll_count() if scroll_count is None else scroll_count,
+        "title": parser.title,
+        "captcha_2gis_present": "captcha.2gis." in html.lower() or "captcha.2gis." in final_url.lower(),
+        "block_evidence": blocked if blocked is not None else _looks_blocked(html, final_url),
+        "blocked": blocked if blocked is not None else _looks_blocked(html, final_url),
+        "review_selector_count": parser.review_selector_count,
+    }
+
+
+class _VisibleTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._hidden_depth = 0
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() in {"script", "style", "noscript"}:
+            self._hidden_depth += 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._hidden_depth and data.strip():
+            self.parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in {"script", "style", "noscript"} and self._hidden_depth:
+            self._hidden_depth -= 1
+
+    @property
+    def text(self) -> str:
+        return " ".join(" ".join(self.parts).split())
+
+
+def _visible_text(html: str) -> str:
+    parser = _VisibleTextParser()
+    parser.feed(html)
+    return parser.text
+
+
+def _looks_blocked(html: str, final_url: str = "") -> bool:
+    if "captcha.2gis." in final_url.lower():
+        return True
+
+    normalized = _visible_text(html).casefold()
     return any(
         marker in normalized
         for marker in (
             "captcha",
-            "cloudflare",
             "access denied",
             "are you a human",
             "verify you are human",
             "unusual traffic",
+            "капча",
+            "подтвердите, что вы не робот",
+            "подозрительную активность",
         )
     )

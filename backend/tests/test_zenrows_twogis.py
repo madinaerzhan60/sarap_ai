@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 
@@ -10,7 +11,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app.collectors.registry import SourceType, collector_registry
 from app.connectors.brightdata_twogis import BrightDataTwoGisConnector
 from app.connectors.reviews import TwoGisPlaywrightConnector
-from app.connectors.zenrows_twogis import ZenRowsTwoGisConnector
+from app.connectors import zenrows_twogis
+from app.connectors.zenrows_twogis import ZenRowsTwoGisConnector, _looks_blocked
 from app.models import RawItem
 from app.scrapers.fallback import ProviderError, ProviderNotConfigured
 
@@ -103,17 +105,43 @@ def test_missing_zenrows_api_key_raises_provider_not_configured(monkeypatch):
 
 def test_successful_zenrows_html_response_uses_expected_api_params(monkeypatch):
     monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setenv("TWOGIS_ZENROWS_SCROLLS", "5")
     connector = ZenRowsTwoGisConnector(TWOGIS_URL)
 
     asyncio.run(connector.fetch_latest())
 
     assert DummyZenRowsClient.last_endpoint == "https://api.zenrows.com/v1/"
-    assert DummyZenRowsClient.last_params == {
-        "url": connector.page_url,
-        "apikey": "test-key",
-        "js_render": "true",
-        "premium_proxy": "true",
-    }
+    assert DummyZenRowsClient.last_params["url"] == connector.page_url
+    assert DummyZenRowsClient.last_params["apikey"] == "test-key"
+    assert DummyZenRowsClient.last_params["js_render"] == "true"
+    assert DummyZenRowsClient.last_params["premium_proxy"] == "true"
+    assert "js_instructions" in DummyZenRowsClient.last_params
+
+
+def test_zenrows_request_contains_multiple_scrolls_in_one_api_call(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setenv("TWOGIS_ZENROWS_SCROLLS", "5")
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    asyncio.run(connector.fetch_latest())
+
+    instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
+    scroll_actions = [item for item in instructions if "evaluate" in item]
+    assert DummyZenRowsClient.last_endpoint == "https://api.zenrows.com/v1/"
+    assert len(scroll_actions) == 5
+    assert DummyZenRowsClient.last_params["url"] == connector.page_url
+
+
+def test_twogis_zenrows_scrolls_controls_scroll_count(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setenv("TWOGIS_ZENROWS_SCROLLS", "2")
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    asyncio.run(connector.fetch_latest())
+
+    instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
+    assert len([item for item in instructions if "evaluate" in item]) == 2
+    assert len(instructions) == 5
 
 
 def test_existing_2gis_parser_converts_zenrows_html_to_raw_items(monkeypatch):
@@ -172,7 +200,6 @@ def test_zenrows_rejects_text_plain_non_html_error(monkeypatch):
         (MockResponse(status_code=403, text="denied"), None),
         (None, httpx.ConnectError("network failed")),
         (MockResponse(status_code=200, text=""), None),
-        (MockResponse(status_code=200, text="<html>captcha</html>"), None),
     ],
 )
 def test_zenrows_failures_raise_provider_error(monkeypatch, response, error):
@@ -184,6 +211,99 @@ def test_zenrows_failures_raise_provider_error(monkeypatch, response, error):
 
     with pytest.raises(ProviderError):
         asyncio.run(connector.fetch_latest())
+
+
+def test_zenrows_real_captcha_html_is_blocked(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(
+        status_code=200,
+        text="<html><body><h1>Captcha</h1><p>Verify you are human</p></body></html>",
+        headers={"content-type": "text/html"},
+    )
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    with pytest.raises(ProviderError, match="blocked or captcha"):
+        asyncio.run(connector.fetch_latest())
+
+
+def test_normal_2gis_html_with_harmless_block_words_is_not_blocked():
+    html = """
+    <html>
+      <head>
+        <meta name="yandex-verification" content="abc">
+        <script>
+          window.__CONFIG__ = {
+            captchaUrl: "https://captcha.2gis.ru/",
+            cdn: "https://cdnjs.cloudflare.com/ajax/libs/example.js"
+          };
+        </script>
+      </head>
+      <body><h1>Отзывы о SDU Life Culture and Sport Center</h1></body>
+    </html>
+    """
+
+    assert _looks_blocked(html) is False
+
+
+def test_normal_html_with_reviews_continues_to_parser(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(
+        status_code=200,
+        text=VALID_HTML,
+        headers={"content-type": "text/plain; charset=utf-8"},
+    )
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    items = asyncio.run(connector.fetch_latest())
+
+    assert len(items) == 1
+    assert items[0].text == "Great SDU service!"
+
+
+def test_html_after_scrolling_is_passed_to_existing_parser(monkeypatch):
+    captured = {}
+
+    def fake_parser(html, page_url, source):
+        captured["html"] = html
+        captured["page_url"] = page_url
+        captured["source"] = source
+        return [
+            RawItem(
+                source=source,
+                source_type="review",
+                external_id="parsed-after-scroll",
+                external_url=page_url,
+                text="Parsed after scroll",
+                metadata={},
+            )
+        ]
+
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setattr(zenrows_twogis, "extract_reviews_from_html", fake_parser)
+    DummyZenRowsClient.response = MockResponse(text="<html><body><div>rendered after scroll</div></body></html>")
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    items = asyncio.run(connector.fetch_latest())
+
+    assert captured["html"] == "<html><body><div>rendered after scroll</div></body></html>"
+    assert captured["page_url"] == connector.page_url
+    assert captured["source"] == "2gis"
+    assert items[0].external_id == "parsed-after-scroll"
+
+
+def test_parser_no_results_is_not_reported_as_blocked(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(
+        status_code=200,
+        text="<html><body><h1>Отзывы о SDU Life Culture and Sport Center</h1></body></html>",
+        headers={"content-type": "text/plain; charset=utf-8"},
+    )
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    with pytest.raises(ProviderError) as excinfo:
+        asyncio.run(connector.fetch_latest())
+
+    assert "no usable 2GIS reviews found" in str(excinfo.value)
 
 
 def test_twogis_provider_brightdata_still_selects_brightdata(monkeypatch):
