@@ -144,25 +144,39 @@ class CollectorRegistry:
         source_type = normalize_source_type(str(source["source"]), page_url)
         mode = str(source.get("collection_mode", "auto"))
         use_worker = bool(os.getenv("COLLECTOR_WORKER_URL", "").strip())
-        if source_type in {SourceType.TWO_GIS, SourceType.YANDEX_MAPS}:
-            # Provider selection via environment variable (default to direct)
-            if source_type == SourceType.TWO_GIS:
-                env_var = "TWOGIS_PROVIDER"
-            elif source_type == SourceType.YANDEX_MAPS:
-                env_var = "YANDEX_PROVIDER"
-            else:
-                env_var = f"{source_type.value.upper().replace('_', '')}_PROVIDER"
-            provider_key = os.getenv(env_var, "direct").strip().lower()
+        if source_type == SourceType.TWO_GIS:
+            provider_key = os.getenv("TWOGIS_PROVIDER", "direct").strip().lower()
             from app.connectors.reviews import TwoGisPlaywrightConnector, MapFallbackConnector
-            # New Bright Data provider
+
             if provider_key == "brightdata":
                 from app.connectors.brightdata_twogis import BrightDataTwoGisConnector
                 return source_type, BrightDataTwoGisConnector(page_url, business_id)
-            elif provider_key == "direct":
+
+            if provider_key == "zenrows":
+                from app.connectors.zenrows_twogis import ZenRowsTwoGisConnector
+                return source_type, ZenRowsTwoGisConnector(page_url, business_id)
+
+            if provider_key == "direct":
                 return source_type, TwoGisPlaywrightConnector(page_url, business_id)
-            else:
-                # Use fallback pipeline which can include Apify, Scrapfly, etc.
-                return source_type, MapFallbackConnector(source_type.value, page_url, business_id)
+
+            return source_type, MapFallbackConnector("2gis", page_url, business_id)
+
+        if source_type == SourceType.YANDEX_MAPS:
+            provider_key = os.getenv("YANDEX_PROVIDER", "direct").strip().lower()
+            from app.connectors.reviews import MapFallbackConnector
+
+            if provider_key == "direct":
+                return source_type, MapFallbackConnector(
+                    "yandex_maps",
+                    page_url,
+                    business_id,
+                )
+
+            return source_type, MapFallbackConnector(
+                "yandex_maps",
+                page_url,
+                business_id,
+            )
         if source_type in {SourceType.GOOGLE_BUSINESS, SourceType.GOOGLE_MAPS}:
             if credentials and mode in {"auto", "api"}:
                 return SourceType.GOOGLE_BUSINESS, GoogleBusinessReviewsConnector(
@@ -180,11 +194,24 @@ class CollectorRegistry:
             # Provider selection via environment variable (default to direct)
             env_var = f"{source_type.value.upper().replace('_', '')}_PROVIDER"
             provider_key = os.getenv(env_var, "direct").strip().lower()
-            from app.connectors.reviews import InstagramFallbackConnector
+            from app.connectors import InstagramApifyConnector
+            from app.connectors.reviews import (
+                InstagramFallbackConnector,
+                InstagramGraphCommentsConnector,
+            )
             from app.connectors.discovery import PublicDiscoveryConnector
             if provider_key == "direct":
+                # If official credentials are supplied, use the official Graph connector
+                if credentials and credentials.get("access_token"):
+                    return source_type, InstagramGraphCommentsConnector(
+                        credentials.get("access_token"),
+                        credentials.get("instagram_user_id"),
+                        credentials.get("media_id"),
+                    )
                 # Direct public discovery
                 return source_type, PublicDiscoveryConnector("instagram", page_url)
+            elif provider_key == "apify":
+                return source_type, InstagramApifyConnector(page_url, business_id)
             else:
                 # Use fallback pipeline (Playwright, SociaVault, SocialCrawl, Apify)
                 return source_type, InstagramFallbackConnector(page_url, business_id)
@@ -198,7 +225,23 @@ class CollectorRegistry:
             proxies = ProxyPool([value for value in os.getenv("WEBSHARE_PROXY_URLS", "").split(",") if value.strip()])
             connector = ModularScraperConnector("threads", page_url, lambda: ThreadsScraper(cast(SupabaseRawReviewStore, None), proxies, os.getenv("THREADS_STORAGE_STATE")), MentionType.social_post)
             return source_type, connector
-        if source_type in {SourceType.LINKEDIN, SourceType.FACEBOOK, SourceType.REDDIT}:
+        if source_type == SourceType.FACEBOOK:
+            # Provider selection via environment variable (default to direct)
+            env_var = f"{source_type.value.upper()}_PROVIDER"
+            provider_key = os.getenv(env_var, "direct").strip().lower()
+            from app.connectors import FacebookApifyConnector
+            from app.connectors.discovery import PublicDiscoveryConnector
+            if provider_key == "direct":
+                return source_type, PublicDiscoveryConnector("facebook", page_url)
+            elif provider_key == "apify":
+                return source_type, FacebookApifyConnector(page_url, business_id)
+            else:
+                raise ConnectorUnavailable(f"Unsupported Facebook provider: {provider_key}")
+        elif source_type in {SourceType.LINKEDIN, SourceType.REDDIT}:
+            if not page_url:
+                raise ConnectorUnavailable(f"{source_type.value} monitoring requires a public page URL")
+            from app.connectors.discovery import PublicDiscoveryConnector
+            return source_type, PublicDiscoveryConnector(source_type.value, page_url)
             if not page_url:
                 raise ConnectorUnavailable(f"{source_type.value} monitoring requires a public page URL")
             from app.connectors.discovery import PublicDiscoveryConnector
