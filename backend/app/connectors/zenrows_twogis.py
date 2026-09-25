@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from html.parser import HTMLParser
 
 import httpx
 
 from app.connectors.base import BaseConnector
 from app.connectors.reviews import extract_reviews_from_html, normalize_twogis_business_url
-from app.models import ConnectionType, RawItem
+from app.models import ConnectionType, MentionType, RawItem
+from app.scrapers.maps_playwright import PROFILES, extract_map_items
 from app.scrapers.fallback import ProviderError, ProviderNotConfigured
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ class ZenRowsTwoGisConnector(BaseConnector):
         if not api_key:
             raise ProviderNotConfigured("ZENROWS_API_KEY is empty")
 
-        timeout = float(os.getenv("CRAWLER_TIMEOUT_SECONDS", "20"))
+        timeout = _timeout_seconds()
         params = {
             "url": self.page_url,
             "apikey": api_key,
@@ -43,12 +45,14 @@ class ZenRowsTwoGisConnector(BaseConnector):
             "premium_proxy": "true",
             "js_instructions": json.dumps(_zenrows_js_instructions()),
         }
+        started_at = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                 response = await client.get("https://api.zenrows.com/v1/", params=params)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise ProviderError(f"zenrows: {exc}") from exc
+            elapsed = time.monotonic() - started_at
+            raise ProviderError(f"zenrows: {_safe_exception_detail(exc, elapsed)}") from exc
 
         html = response.text.strip()
         if not html:
@@ -80,7 +84,7 @@ class ZenRowsTwoGisConnector(BaseConnector):
         if blocked:
             raise ProviderError("zenrows: blocked or captcha response")
 
-        items = extract_reviews_from_html(html, self.page_url, self.source)
+        items = _extract_twogis_items(html, self.page_url)
         if not items:
             raise ProviderError("zenrows: no usable 2GIS reviews found in response")
         if last_seen_item_id:
@@ -93,12 +97,55 @@ class ZenRowsTwoGisConnector(BaseConnector):
         return items
 
 
+def _timeout_seconds() -> float:
+    raw = os.getenv("ZENROWS_TIMEOUT_SECONDS") or os.getenv("CRAWLER_TIMEOUT_SECONDS", "20")
+    try:
+        return max(10.0, float(raw))
+    except ValueError:
+        return 60.0
+
+
 def _scroll_count() -> int:
     raw = os.getenv("TWOGIS_ZENROWS_SCROLLS", "5").strip()
     try:
         return max(0, min(int(raw), 25))
     except ValueError:
         return 5
+
+
+def _extract_twogis_items(html: str, page_url: str) -> list[RawItem]:
+    scraped = extract_map_items(
+        html,
+        PROFILES["2gis"],
+        page_url,
+        max(1, int(os.getenv("INITIAL_REVIEW_LIMIT", "500"))),
+        "zenrows",
+    )
+    items = [
+        RawItem(
+            source="2gis",
+            source_type=MentionType.review,
+            external_id=item.stable_id(),
+            external_url=item.url,
+            author_name=None if item.author == "Unknown" else item.author,
+            text=item.text_content,
+            rating=item.rating,
+            published_at=item.published_at,
+            metadata={**item.metadata, "language": item.language, "collected_by": "zenrows"},
+        )
+        for item in scraped
+    ]
+    return items or extract_reviews_from_html(html, page_url, "2gis")
+
+
+def _safe_exception_detail(exc: BaseException, elapsed_seconds: float | None = None) -> str:
+    class_name = type(exc).__name__
+    elapsed = f" after {elapsed_seconds:.1f}s" if elapsed_seconds is not None else ""
+    message = str(exc).strip()
+    representation = repr(exc)
+    if message:
+        return f"{class_name}{elapsed}: {message}"
+    return f"{class_name}{elapsed}: {representation}"
 
 
 def _zenrows_js_instructions() -> list[dict[str, str | int]]:

@@ -22,3 +22,7 @@ exports/
 logs/
 .vercel
 .env*
+backend/.sarap-browser-profile/
+backend/2gis_debug.html
+backend/2gis_reviews.json
+backend/manual_2gis_test*.py

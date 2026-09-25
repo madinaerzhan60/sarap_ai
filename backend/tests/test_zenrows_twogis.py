@@ -35,6 +35,20 @@ VALID_HTML = """
 </body>
 </html>
 """
+TWOGIS_CARD_HTML = """
+<html lang="ru">
+<head><title>Отзывы о SDU - 2ГИС</title></head>
+<body>
+  <div class="_1rowqpjv" data-review-id="review-42">
+    <span title="Aruzhan">Aruzhan</span>
+    <div class="_83kmcy"><a>Excellent university gym and campus life.</a></div>
+    <span class="_10c0hgu">2026-09-01T00:00:00+00:00</span>
+    <svg color="#ffb81c"></svg><svg color="#ffb81c"></svg><svg color="#ffb81c"></svg>
+    <svg color="#ffb81c"></svg><svg color="#ffb81c"></svg>
+  </div>
+</body>
+</html>
+"""
 
 
 class MockResponse:
@@ -58,10 +72,12 @@ class DummyZenRowsClient:
     error = None
     last_endpoint = None
     last_params = None
+    last_timeout = None
 
     def __init__(self, *args, **kwargs):
         self.timeout = kwargs.get("timeout")
         self.follow_redirects = kwargs.get("follow_redirects")
+        DummyZenRowsClient.last_timeout = self.timeout
 
     async def __aenter__(self):
         return self
@@ -77,12 +93,18 @@ class DummyZenRowsClient:
         return DummyZenRowsClient.response
 
 
+class EmptyMessageHttpError(httpx.HTTPError):
+    def __str__(self):
+        return ""
+
+
 @pytest.fixture(autouse=True)
 def reset_dummy_client(monkeypatch):
     DummyZenRowsClient.response = MockResponse(text=VALID_HTML)
     DummyZenRowsClient.error = None
     DummyZenRowsClient.last_endpoint = None
     DummyZenRowsClient.last_params = None
+    DummyZenRowsClient.last_timeout = None
     monkeypatch.setattr("app.connectors.zenrows_twogis.httpx.AsyncClient", DummyZenRowsClient)
 
 
@@ -116,6 +138,17 @@ def test_successful_zenrows_html_response_uses_expected_api_params(monkeypatch):
     assert DummyZenRowsClient.last_params["js_render"] == "true"
     assert DummyZenRowsClient.last_params["premium_proxy"] == "true"
     assert "js_instructions" in DummyZenRowsClient.last_params
+
+
+def test_zenrows_uses_provider_specific_timeout(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setenv("CRAWLER_TIMEOUT_SECONDS", "20")
+    monkeypatch.setenv("ZENROWS_TIMEOUT_SECONDS", "75")
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    asyncio.run(connector.fetch_latest())
+
+    assert DummyZenRowsClient.last_timeout == 75
 
 
 def test_zenrows_request_contains_multiple_scrolls_in_one_api_call(monkeypatch):
@@ -155,6 +188,21 @@ def test_existing_2gis_parser_converts_zenrows_html_to_raw_items(monkeypatch):
     assert items[0].source == "2gis"
     assert items[0].external_id == "2gis-review-1"
     assert items[0].text == "Great SDU service!"
+    assert items[0].author_name == "Aruzhan"
+    assert items[0].rating == 5
+
+
+def test_rendered_2gis_review_cards_use_existing_dom_parser(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(text=TWOGIS_CARD_HTML)
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    items = asyncio.run(connector.fetch_latest())
+
+    assert len(items) == 1
+    assert items[0].source == "2gis"
+    assert items[0].external_id
+    assert items[0].text == "Excellent university gym and campus life."
     assert items[0].author_name == "Aruzhan"
     assert items[0].rating == 5
 
@@ -211,6 +259,27 @@ def test_zenrows_failures_raise_provider_error(monkeypatch, response, error):
 
     with pytest.raises(ProviderError):
         asyncio.run(connector.fetch_latest())
+
+
+@pytest.mark.parametrize(
+    "error,expected",
+    [
+        (httpx.ReadTimeout(""), "ReadTimeout"),
+        (httpx.ConnectTimeout(""), "ConnectTimeout"),
+        (EmptyMessageHttpError(""), "EmptyMessageHttpError"),
+    ],
+)
+def test_zenrows_http_errors_include_useful_diagnostic(monkeypatch, error, expected):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.error = error
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    with pytest.raises(ProviderError) as excinfo:
+        asyncio.run(connector.fetch_latest())
+
+    message = str(excinfo.value)
+    assert message.startswith(f"zenrows: {expected} after ")
+    assert message != "zenrows:"
 
 
 def test_zenrows_real_captcha_html_is_blocked(monkeypatch):
