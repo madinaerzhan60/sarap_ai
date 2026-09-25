@@ -42,13 +42,12 @@ class ZenRowsTwoGisConnector(BaseConnector):
         except httpx.HTTPError as exc:
             raise ProviderError(f"zenrows: {exc}") from exc
 
-        content_type = response.headers.get("content-type", "")
-        if "text/html" not in content_type:
-            raise ProviderError(f"zenrows: unexpected content type {content_type}")
-
         html = response.text.strip()
         if not html:
             raise ProviderError("zenrows: empty response")
+        content_type = response.headers.get("content-type", "")
+        if "text/html" not in content_type and not _looks_like_html(html):
+            raise ProviderError(f"zenrows: unexpected content type {content_type}")
         if _looks_blocked(html):
             raise ProviderError("zenrows: blocked or captcha response")
 
@@ -63,6 +62,15 @@ class ZenRowsTwoGisConnector(BaseConnector):
                 )
             ]
         return items
+
+
+def _looks_like_html(html: str) -> bool:
+    normalized = html.lstrip().lower()
+    return (
+        normalized.startswith("<html")
+        or normalized.startswith("<!doctype")
+        or "<body" in normalized
+    )
 
 
 def _looks_blocked(html: str) -> bool:

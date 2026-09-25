@@ -16,6 +16,23 @@ from app.scrapers.fallback import ProviderError, ProviderNotConfigured
 
 
 TWOGIS_URL = "https://2gis.kz/almaty/firm/12345"
+VALID_HTML = """
+<html lang="ru">
+<head><title>2GIS</title></head>
+<body>
+<script type="application/ld+json">
+{
+  "@type": "Review",
+  "@id": "2gis-review-1",
+  "reviewBody": "Great SDU service!",
+  "author": {"name": "Aruzhan"},
+  "reviewRating": {"ratingValue": 5},
+  "datePublished": "2026-09-01"
+}
+</script>
+</body>
+</html>
+"""
 
 
 class MockResponse:
@@ -60,20 +77,7 @@ class DummyZenRowsClient:
 
 @pytest.fixture(autouse=True)
 def reset_dummy_client(monkeypatch):
-    DummyZenRowsClient.response = MockResponse(
-        text="""
-        <script type="application/ld+json">
-        {
-          "@type": "Review",
-          "@id": "2gis-review-1",
-          "reviewBody": "Great SDU service!",
-          "author": {"name": "Aruzhan"},
-          "reviewRating": {"ratingValue": 5},
-          "datePublished": "2026-09-01"
-        }
-        </script>
-        """
-    )
+    DummyZenRowsClient.response = MockResponse(text=VALID_HTML)
     DummyZenRowsClient.error = None
     DummyZenRowsClient.last_endpoint = None
     DummyZenRowsClient.last_params = None
@@ -125,6 +129,41 @@ def test_existing_2gis_parser_converts_zenrows_html_to_raw_items(monkeypatch):
     assert items[0].text == "Great SDU service!"
     assert items[0].author_name == "Aruzhan"
     assert items[0].rating == 5
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/plain; charset=utf-8",
+        "text/html; charset=utf-8",
+    ],
+)
+def test_zenrows_accepts_valid_html_for_supported_content_types(monkeypatch, content_type):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(
+        status_code=200,
+        text=VALID_HTML,
+        headers={"content-type": content_type},
+    )
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    items = asyncio.run(connector.fetch_latest())
+
+    assert len(items) == 1
+    assert items[0].external_id == "2gis-review-1"
+
+
+def test_zenrows_rejects_text_plain_non_html_error(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(
+        status_code=200,
+        text="upstream rendered response unavailable",
+        headers={"content-type": "text/plain; charset=utf-8"},
+    )
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    with pytest.raises(ProviderError):
+        asyncio.run(connector.fetch_latest())
 
 
 @pytest.mark.parametrize(
