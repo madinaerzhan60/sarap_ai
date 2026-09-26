@@ -28,6 +28,7 @@ from app.connectors.reviews import ConnectorUnavailable, normalize_twogis_busine
 from app.collectors.registry import collector_registry
 from app.connectors.search import DiscoveryNotConfigured, DiscoveryService, canonical_url, fan_out
 from app.models import DiscoveryRequest, ExtractedReview, ImportFieldMapping, ManualImportRequest, MentionType, MentionUpdate, ProcessedMention, RawItem, ReplyDraftRequest, ReplyStatus, ReviewExtractionRequest, ReviewImportRequest, RiskResult, SourceCreate, SourceImportRequest, SourceImportResult, SourceOAuthCredential, SourceUpdate
+from app.services.ai import extract_review_topic
 from app.services.llm import analyze_with_cascade, generate_reply_draft
 from app.services.normalization import normalize
 from app.services.dedupe import find_near_duplicate_group
@@ -672,6 +673,103 @@ def _period_bounds(days: int) -> tuple[date, date]:
     return end - timedelta(days=max(1, min(days, 365)) - 1), end
 
 
+TOPIC_TITLES_RU = {
+    "staff_communication": "коммуникация сотрудников",
+    "dormitory": "общежитие",
+    "transport_access": "транспорт и доступность",
+    "food_canteen": "еда и столовая",
+    "academic_registration": "академическая регистрация",
+    "teaching_quality": "качество обучения",
+    "campus_atmosphere": "кампус и атмосфера",
+    "support_response": "ответ поддержки",
+    "pricing_money": "деньги и оплата",
+    "scam_fairness": "честность и доверие",
+}
+
+TOPIC_ACTIONS_RU = {
+    "staff_communication": "Провести разбор обращений, закрепить стандарты общения и проверить ответы сотрудников в спорных ситуациях.",
+    "dormitory": "Обновить инструкции для студентов, назначить ответственного за понятные ответы и отслеживать жалобы по общежитию.",
+    "transport_access": "Проверить частые жалобы на дорогу, расписание и навигацию; отдельно объяснять варианты проезда.",
+    "food_canteen": "Проверить повторяющиеся замечания по качеству еды, ассортименту и работе столовой.",
+    "academic_registration": "Разобрать сбои регистрации, оплаты и портала; подготовить понятный порядок решения таких случаев.",
+    "teaching_quality": "Собрать примеры по занятиям и преподавателям, затем обсудить их с академической командой.",
+    "campus_atmosphere": "Сохранять сильные стороны кампуса, мест отдыха и студенческой среды в коммуникациях и сервисе.",
+    "support_response": "Установить срок ответа, шаблоны уточнений и контроль нерешенных обращений.",
+    "pricing_money": "Проверить, где студентам непонятны оплата, возвраты или ценность услуги, и обновить объяснения.",
+    "scam_fairness": "Разобрать спорные кейсы на прозрачность, зафиксировать правила и дать понятное объяснение участникам.",
+}
+
+
+def _topic_title(topic: str) -> str:
+    return TOPIC_TITLES_RU.get(topic, topic.replace("_", " "))
+
+
+def _recommendation(title: str, evidence: str, action: str, count: int) -> dict[str, Any]:
+    return {"title": title, "evidence": evidence, "action": action, "count": count}
+
+
+def _build_business_recommendations(rows: list[ProcessedMention], industry: str) -> dict[str, Any]:
+    positive = Counter()
+    negative = Counter()
+    high_risk = Counter()
+    examples: dict[str, str] = {}
+    for item in rows:
+        topic, _ = extract_review_topic(item.mention.text, item.analysis.sentiment)
+        if topic == "low_signal":
+            continue
+        examples.setdefault(topic, item.analysis.summary or item.mention.text[:120])
+        if item.analysis.sentiment == "positive":
+            positive[topic] += 1
+        elif item.analysis.sentiment in {"negative", "mixed"}:
+            negative[topic] += 1
+            if item.risk.score >= 60 or item.analysis.severity in {"high", "critical"}:
+                high_risk[topic] += 1
+
+    urgent = [
+        _recommendation(
+            f"Срочно исправить: {_topic_title(topic)}",
+            f"{count} повторяющихся риск-сигнала: {examples.get(topic, '').rstrip('.')}.",
+            TOPIC_ACTIONS_RU.get(topic, "Разобрать повторяющиеся жалобы и назначить ответственного за исправление."),
+            count,
+        )
+        for topic, count in high_risk.most_common(3)
+        if count >= 2
+    ]
+    urgent_topics = {topic for topic, count in high_risk.items() if count >= 2}
+    improve = [
+        _recommendation(
+            f"Улучшить: {_topic_title(topic)}",
+            f"{count} негативных упоминания: {examples.get(topic, '').rstrip('.')}.",
+            TOPIC_ACTIONS_RU.get(topic, "Проверить повторяющуюся проблему и подготовить понятный план улучшения."),
+            count,
+        )
+        for topic, count in negative.most_common(4)
+        if count >= 2 and topic not in urgent_topics
+    ][:3]
+    keep_doing = [
+        _recommendation(
+            f"Сохранять: {_topic_title(topic)}",
+            f"{count} положительных упоминания: {examples.get(topic, '').rstrip('.')}.",
+            TOPIC_ACTIONS_RU.get(topic, "Сохранить практики, которые клиенты повторно отмечают как сильную сторону."),
+            count,
+        )
+        for topic, count in positive.most_common(3)
+        if count >= 2
+    ]
+
+    strengths = ", ".join(f"{_topic_title(topic)} — {count}" for topic, count in positive.most_common(5) if count >= 2)
+    weaknesses = ", ".join(f"{_topic_title(topic)} — {count}" for topic, count in negative.most_common(5) if count >= 2)
+    if strengths or weaknesses:
+        summary = (
+            f"Общая картина для {industry}: "
+            f"сильные темы: {strengths or 'нет устойчивых повторов'}; "
+            f"проблемные темы: {weaknesses or 'нет устойчивых повторов'}."
+        )
+    else:
+        summary = "Пока недостаточно повторяющихся конкретных тем для бизнес-выводов."
+    return {"score": 0, "summary": summary, "recommendations": {"urgent_fix": urgent, "improve": improve, "keep_doing": keep_doing}}
+
+
 @app.get("/api/analytics")
 async def analytics(business_id: UUID, days: int = 30, context: AuthContext = Depends(require_user)) -> dict:
     await require_business_member(context, business_id)
@@ -708,16 +806,7 @@ async def recommendations(business_id: UUID, days: int = 30, refresh: bool = Fal
             "recommendations": {"urgent_fix": [], "improve": [], "keep_doing": []},
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
-    aspect_sentiment = Counter((aspect.aspect, aspect.sentiment) for item in rows for aspect in item.analysis.aspects)
-    high_risk = Counter(aspect.aspect for item in rows if item.risk.score >= 60 for aspect in item.analysis.aspects if aspect.sentiment == "negative")
-    urgent = [f"Address {aspect} — {count} high-risk negative mentions" for aspect, count in high_risk.most_common(3) if count >= 2]
-    negative = [(aspect, count) for (aspect, sentiment), count in aspect_sentiment.most_common() if sentiment == "negative" and count >= 2 and aspect not in dict(high_risk)]
-    positive = [(aspect, count) for (aspect, sentiment), count in aspect_sentiment.most_common() if sentiment == "positive" and count >= 2]
-    payload = {"score": 0, "summary": f"Evidence-based themes for {industry} from included mentions." if urgent or negative or positive else "Not enough data yet", "recommendations": {
-        "urgent_fix": urgent,
-        "improve": [f"Improve {aspect} — {count} negative mentions" for aspect, count in negative[:3]],
-        "keep_doing": [f"Keep supporting {aspect} — {count} positive mentions" for aspect, count in positive[:3]],
-    }}
+    payload = _build_business_recommendations(rows, industry)
     result = {"business_id": str(business_id), "period_start": start.isoformat(), "period_end": end.isoformat(), "score": payload["score"], "summary": payload["summary"], "recommendations": payload["recommendations"], "generated_at": datetime.now(timezone.utc).isoformat()}
     if repository.configured:
         try:

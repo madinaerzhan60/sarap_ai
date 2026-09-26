@@ -1,7 +1,8 @@
 from uuid import uuid4
 
 from app.models import ExtractedReview, RawItem
-from app.services.ai import analyze, summarize_review
+from app.services.ai import analyze, extract_review_topic, summarize_review
+from app.services.llm import _ensure_summary
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
@@ -182,6 +183,25 @@ def test_summary_captures_grounded_review_topics():
     assert summarize_review("Классно", "positive") == "Краткая положительная оценка без дополнительных деталей."
     assert summarize_review("Govno", "negative") == "Brief strongly negative assessment without a specific reason."
     assert summarize_review("❤️", "positive") == "Краткая положительная реакция без текстовых деталей."
+
+
+def test_summary_captures_dormitory_admissions_complaint():
+    assert summarize_review(
+        "Приемная комиссия в общежитие грубая, ничего нормально не объясняют",
+        "negative",
+    ) == "Жалуется на грубое общение приемной комиссии общежития и отсутствие понятных объяснений."
+
+
+def test_generic_llm_summary_is_replaced_with_specific_fallback():
+    result = analyze("Приемная комиссия в общежитие грубая, ничего нормально не объясняют")
+    generic = result.model_copy(update={"summary": "Пользователь сообщает о негативном опыте."})
+    fixed = _ensure_summary(generic, "Приемная комиссия в общежитие грубая, ничего нормально не объясняют")
+    assert fixed.summary == "Жалуется на грубое общение приемной комиссии общежития и отсутствие понятных объяснений."
+
+
+def test_topic_extraction_marks_short_reactions_low_signal():
+    assert extract_review_topic("SDU😍", "positive")[0] == "low_signal"
+    assert extract_review_topic("Очень грубая приемная комиссия общежития", "negative")[0] == "staff_communication"
 
 
 def test_twogis_search_url_without_firm_id_is_rejected():

@@ -537,7 +537,7 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
 .recommendations-card { margin-top:15px; }
 .recommendation-grid { grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:15px; }
 .recommendation-item { min-height:128px;padding:16px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.46); }
-.recommendation-item h3 { margin:0 0 10px;font-size:12px;text-transform:capitalize; }.recommendation-item ul{margin:0;padding-left:17px}.recommendation-item li{margin:7px 0;font-size:11px;line-height:1.5}
+.recommendation-item h3 { margin:0 0 10px;font-size:12px;text-transform:capitalize; }.recommendation-item ul{margin:0;padding-left:17px}.recommendation-item li{margin:7px 0;font-size:11px;line-height:1.5}.recommendation-item li strong,.recommendation-item li span,.recommendation-item li small{display:block}.recommendation-item li strong{margin-bottom:5px;color:var(--ink)}.recommendation-item li span{margin-top:4px;color:#4d5360}.recommendation-item li small{margin-top:6px;color:var(--muted);font:500 9px "IBM Plex Mono",monospace;text-transform:uppercase;letter-spacing:.06em}
 @media (max-width:980px){.topbar-inner{grid-template-columns:auto minmax(0,1fr) auto}.top-nav{overflow-x:auto;justify-content:flex-start;scrollbar-width:none}.top-nav::-webkit-scrollbar{display:none}}
 @media (max-width:720px){.overview-section-head{align-items:flex-start;flex-direction:column}.recommendation-grid{grid-template-columns:1fr}}
 

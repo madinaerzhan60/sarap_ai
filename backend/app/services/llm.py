@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from abc import ABC, abstractmethod
 
 import httpx
@@ -24,7 +25,9 @@ same language as the review where practical. For very short reactions, say that
 the reaction is brief and has no specific details. Words such as scam,
 deception, cannot log in, no support and do not buy are negative. If a numeric
 rating is provided, use 1-2 as negative, 3 as neutral and 4-5 as positive. Never
-invent facts."""
+invent facts. Never write generic summaries like "user is satisfied", "negative
+experience", "positive feedback", "shares an opinion", or Russian equivalents
+such as "положительно оценивает сервис" and "сообщает о негативном опыте"."""
 
 
 def _json_text(value: str) -> str:
@@ -97,10 +100,17 @@ def _ensure_summary(result: AIAnalysis, text: str) -> AIAnalysis:
     summary = result.summary.strip()
     normalized_text = " ".join(text.split()).casefold()
     normalized_summary = " ".join(summary.split()).casefold()
+    generic = bool(re.search(
+        r"(user|customer|пользователь|клиент).{0,40}(satisfied|negative experience|positive feedback|shares an opinion|"
+        r"довол|негативн.{0,15}опыт|положительн.{0,20}(?:оценивает|отзыв)|делится.{0,20}мнени)",
+        normalized_summary,
+        re.I,
+    ))
     copied = bool(normalized_summary) and (
         normalized_summary == normalized_text
         or normalized_text.startswith(normalized_summary.rstrip("…"))
         or normalized_summary.startswith(("положительный отзыв:", "проблема:", "positive feedback:", "reported issue:"))
+        or generic
     )
     if summary and not copied:
         return result
@@ -137,12 +147,15 @@ async def analyze_with_cascade(text: str, rating: float | None = None) -> AIAnal
 
 async def generate_business_recommendations(text: str) -> dict:
     prompt = f"""Review these recent customer mentions and return JSON only with:
-score (number 0-10), summary (one short sentence), recommendations with arrays
-urgent_fix, improve, keep_doing. Each array item must be a short actionable phrase.
-Do not invent facts.\n\nMENTIONS:\n{text[:24000]}"""
+score (number 0-10), summary (Russian business overview naming repeated concrete
+strengths and weaknesses), recommendations with arrays urgent_fix, improve,
+keep_doing. Each array item must be an object with title, evidence, action, count.
+Use only repeated real topics from the mentions. Avoid generic labels such as
+overall, service, delivery or atmosphere unless the mention text gives that
+specific concrete topic. Do not invent facts.\n\nMENTIONS:\n{text[:24000]}"""
     try:
         if os.getenv("GROQ_API_KEY"):
-            payload = {"model": os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b"), "temperature": 0, "response_format": {"type": "json_object"}, "messages": [{"role": "system", "content": "You synthesize customer feedback. Return only valid JSON with score, summary, and recommendations. recommendations must contain urgent_fix, improve, keep_doing arrays of short strings."}, {"role": "user", "content": prompt}]}
+            payload = {"model": os.getenv("GROQ_FAST_MODEL", "openai/gpt-oss-20b"), "temperature": 0, "response_format": {"type": "json_object"}, "messages": [{"role": "system", "content": "You synthesize customer feedback for a Kazakhstan business. Return only valid JSON with score, summary, and recommendations. Recommendation items must be objects with title, evidence, action, count, in Russian UI language."}, {"role": "user", "content": prompt}]}
             async with httpx.AsyncClient(timeout=25) as client:
                 response = await client.post("https://api.groq.com/openai/v1/chat/completions", headers={"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"}, json=payload)
                 response.raise_for_status()

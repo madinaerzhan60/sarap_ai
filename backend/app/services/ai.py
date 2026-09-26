@@ -18,6 +18,19 @@ ASPECTS = {
     "atmosphere": r"атмосфер|интерьер|atmosphere",
 }
 
+TOPIC_PATTERNS = [
+    ("staff_communication", "коммуникация сотрудников", r"груб|дөрекі|персонал|сотрудник|менеджер|приемн|приёмн|адмис|admission|staff|rude"),
+    ("dormitory", "общежитие", r"общежит|общаг|дорм|жатақхана|dorm"),
+    ("transport_access", "транспорт и расположение", r"каскелен|далеко|автобус|шаттл|транспорт|дорог.{0,20}(?:до|в)|location|transport|shuttle"),
+    ("food_canteen", "еда и столовая", r"столов|еда|кофе|блюд|тағам|дәм|асхана|canteen|food"),
+    ("academic_registration", "академическая регистрация", r"кредит|зарегистр|дисциплин|регистрац|portal|портал|schedule|расписан"),
+    ("teaching_quality", "качество обучения", r"преподав|учител|сабақ|лекци|teacher|professor|teaching|class"),
+    ("campus_atmosphere", "кампус и атмосфера", r"кампус|трц|атмосфер|красив|мест.{0,25}(?:поспать|отдох)|student life|clubs|club|ивент|event"),
+    ("support_response", "ответ поддержки", r"поддержк|не\s+отвеч|игнор|support|no reply"),
+    ("pricing_money", "деньги и оплата", r"деньг|оплат|дорог|цен|стоимост|баға|қымбат|price|cost|refund"),
+    ("scam_fairness", "честность и доверие", r"обман|мошен|подстав|розыгрыш|scam|fraud|deception"),
+]
+
 
 def _is_russian_like(text: str) -> bool:
     return bool(re.search(r"[а-яё]", text, re.I))
@@ -40,6 +53,17 @@ def _short_reaction_summary(compact: str, sentiment: str) -> str | None:
     return "Краткая реакция без конкретных деталей." if russian else "Brief reaction without specific details."
 
 
+def extract_review_topic(text: str, sentiment: str = "neutral") -> tuple[str, str]:
+    compact = " ".join(text.split())
+    lowered = compact.casefold()
+    if _short_reaction_summary(compact, sentiment):
+        return ("low_signal", "низкосигнальный короткий отзыв")
+    for tag, label, pattern in TOPIC_PATTERNS:
+        if re.search(pattern, lowered, re.I):
+            return tag, label
+    return ("low_signal", "низкосигнальный отзыв без конкретной темы")
+
+
 def _topic_summary_ru(lowered: str) -> str | None:
     positive: list[str] = []
     negative: list[str] = []
@@ -49,6 +73,10 @@ def _topic_summary_ru(lowered: str) -> str | None:
         negative.append("расположения в Каскелене")
     if re.search(r"деньг|оплат", lowered) and re.search(r"пофиг|безразлич|главное|приоритет", lowered):
         return "Жалуется на безразличное отношение и считает, что приоритет отдается деньгам."
+    if re.search(r"при[её]мн.{0,25}(?:общежит|общаг)|(?:общежит|общаг).{0,35}при[её]мн", lowered) and re.search(r"груб|хам|не\s+объяс|объяснен|понятн", lowered):
+        return "Жалуется на грубое общение приемной комиссии общежития и отсутствие понятных объяснений."
+    if re.search(r"общежит|общаг|жатақхана", lowered) and re.search(r"груб|хам|не\s+объяс|очеред|мест", lowered):
+        return "Жалуется на проблемы с общежитием и коммуникацией сотрудников."
     if re.search(r"кредит", lowered) and re.search(r"зарегистр|дисциплин", lowered):
         return "Жалуется на проблемы с академическими кредитами и невозможность зарегистрироваться на дисциплины после оплаты."
     if re.search(r"поддержк.{0,35}(?:не\s+отвеч|никак|игнор)", lowered):
@@ -64,7 +92,7 @@ def _topic_summary_ru(lowered: str) -> str | None:
     if re.search(r"долго|очеред|ожида", lowered):
         return "Жалуется на долгое ожидание."
     if re.search(r"груб|персонал|сотрудник|менеджер", lowered):
-        return "Описывает опыт взаимодействия с сотрудниками."
+        return "Жалуется на неприятное взаимодействие с сотрудниками."
     if re.search(r"дорог|цен|стоимост", lowered):
         return "Недоволен стоимостью услуги."
     if re.search(r"приложен.{0,45}(?:спорт|занят)|(?:спорт|занят).{0,45}приложен", lowered):
