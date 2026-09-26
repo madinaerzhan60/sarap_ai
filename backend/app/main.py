@@ -14,7 +14,7 @@ from collections import Counter
 from datetime import datetime, time, timezone
 from datetime import date, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,6 +50,7 @@ app.add_middleware(CORSMiddleware, allow_origins=sorted(frontend_origins), allow
 seen_hashes: set[str] = set()
 processed: list[ProcessedMention] = []
 sources: list[dict] = []
+import_jobs: dict[str, dict[str, Any]] = {}
 ignored_authors: set[tuple[UUID, str, str]] = set()
 logger = logging.getLogger("sarap.discovery")
 
@@ -479,7 +480,33 @@ def _raw_item_from_import_row(row: dict[str, Any], index: int, request: SourceIm
     )
 
 
-async def _record_import_source(request: SourceImportRequest) -> dict[str, Any] | None:
+async def _record_import_source(request: SourceImportRequest, context: AuthContext) -> dict[str, Any] | None:
+    if request.source_id:
+        existing = await repository.get_source(str(request.source_id)) if repository.configured else next((item for item in sources if item.get("id") == str(request.source_id)), None)
+        if not existing:
+            raise HTTPException(404, "Source not found")
+        await require_business_member(context, UUID(existing["business_id"]))
+        if UUID(existing["business_id"]) != request.business_id:
+            raise HTTPException(403, "Source does not belong to this workspace")
+        values = {
+            "active_collection_method": request.ingestion_method,
+            "last_checked_at": datetime.now(timezone.utc).isoformat(),
+            "error_message": None,
+        }
+        if request.source_url:
+            values["source_url"] = str(request.source_url)
+        if request.enable_automatic_sync:
+            values["connection_type"] = "monitored"
+            values["collection_mode"] = "auto"
+            values["status"] = "active"
+        elif request.ingestion_method != "manual":
+            values["status"] = "imported"
+        if repository.configured:
+            await repository.update_source(str(request.source_id), values)
+            updated = await repository.get_source(str(request.source_id))
+            return updated or existing
+        existing.update(values)
+        return existing
     label = request.display_name or request.filename or {
         "csv": "CSV Import",
         "json": "JSON Import",
@@ -488,8 +515,9 @@ async def _record_import_source(request: SourceImportRequest) -> dict[str, Any] 
     source = SourceCreate(
         business_id=request.business_id,
         source=label,
-        connection_type="imported",
+        connection_type="monitored" if request.enable_automatic_sync else "imported",
         collection_mode="auto",
+        source_url=request.source_url,
     )
     if repository.configured:
         try:
@@ -514,7 +542,7 @@ async def _record_import_source(request: SourceImportRequest) -> dict[str, Any] 
 
 
 @app.post("/api/sources/import", response_model=SourceImportResult)
-async def import_source_data(request: SourceImportRequest, context: AuthContext = Depends(require_user)) -> SourceImportResult:
+async def import_source_data(request: SourceImportRequest, context: AuthContext = Depends(require_user)) -> SourceImportResult | JSONResponse:
     await require_business_member(context, request.business_id)
     if request.ingestion_method == "csv":
         if not request.csv_content:
@@ -531,13 +559,41 @@ async def import_source_data(request: SourceImportRequest, context: AuthContext 
     mapping = _guess_mapping(rows, request.mapping)
     if "text" not in mapping:
         raise HTTPException(422, "Map one column to text before importing")
-    source_row = await _record_import_source(request)
+    source_row = await _record_import_source(request, context)
+    if len(rows) > int(os.getenv("SOURCE_IMPORT_SYNC_LIMIT", "100")):
+        job_id = str(uuid4())
+        import_jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "source_id": source_row["id"] if source_row else None,
+            "total_read": len(rows),
+            "processed": 0,
+            "inserted": 0,
+            "duplicates": 0,
+            "invalid": 0,
+            "failed": 0,
+            "source_used": request.platform,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        asyncio.create_task(_run_source_import_job(job_id, request, rows, mapping, source_row))
+        return JSONResponse(
+            status_code=202,
+            content={**import_jobs[job_id], "source": source_row, "job_id": job_id},
+        )
+    return await _process_source_import(request, rows, mapping, source_row)
+
+
+async def _process_source_import(request: SourceImportRequest, rows: list[dict[str, Any]], mapping: dict[str, str], source_row: dict[str, Any] | None, job_id: str | None = None) -> SourceImportResult:
     results: list[ProcessedMention] = []
     invalid = failed = duplicates = inserted = 0
+    source_connection_id = str(source_row["id"]) if source_row else None
+    batch_size = max(1, int(os.getenv("SOURCE_IMPORT_BATCH_SIZE", "50")))
     for index, row in enumerate(rows):
-        item = _raw_item_from_import_row(row, index, request, mapping, str(source_row["id"]) if source_row else None)
+        item = _raw_item_from_import_row(row, index, request, mapping, source_connection_id)
         if not item:
             invalid += 1
+            if job_id:
+                import_jobs[job_id].update({"processed": index + 1, "invalid": invalid})
             continue
         try:
             result = await process_item(request.business_id, item)
@@ -549,6 +605,16 @@ async def import_source_data(request: SourceImportRequest, context: AuthContext 
             duplicates += 1
         else:
             inserted += 1
+        if job_id and ((index + 1) % batch_size == 0 or index + 1 == len(rows)):
+            import_jobs[job_id].update({
+                "status": "running",
+                "processed": index + 1,
+                "inserted": inserted,
+                "duplicates": duplicates,
+                "invalid": invalid,
+                "failed": failed,
+            })
+            await asyncio.sleep(0)
     if repository.configured and source_row:
         await repository.update_source(source_row["id"], {
             "status": "import_failed" if failed and not inserted else ("active" if request.ingestion_method == "manual" else "imported"),
@@ -565,6 +631,40 @@ async def import_source_data(request: SourceImportRequest, context: AuthContext 
         source_used=request.platform,
         items=results,
     )
+
+
+async def _run_source_import_job(job_id: str, request: SourceImportRequest, rows: list[dict[str, Any]], mapping: dict[str, str], source_row: dict[str, Any] | None) -> None:
+    import_jobs[job_id]["status"] = "running"
+    try:
+        result = await _process_source_import(request, rows, mapping, source_row, job_id)
+        import_jobs[job_id].update({
+            "status": "completed" if result.failed == 0 else "partial",
+            "processed": result.total_read,
+            "inserted": result.inserted,
+            "duplicates": result.duplicates,
+            "invalid": result.invalid,
+            "failed": result.failed,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        import_jobs[job_id].update({
+            "status": "failed",
+            "error": type(exc).__name__,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+@app.get("/api/sources/import-jobs/{job_id}")
+async def source_import_job_status(job_id: UUID, context: AuthContext = Depends(require_user)) -> dict:
+    job = import_jobs.get(str(job_id))
+    if not job:
+        raise HTTPException(404, "Import job not found")
+    source_id = job.get("source_id")
+    if source_id:
+        source = await repository.get_source(str(source_id)) if repository.configured else next((item for item in sources if item.get("id") == str(source_id)), None)
+        if source:
+            await require_business_member(context, UUID(source["business_id"]))
+    return job
 
 
 def _period_bounds(days: int) -> tuple[date, date]:

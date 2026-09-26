@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.main import delete_source, import_source_data
+from app.main import delete_source, import_jobs, import_source_data, source_import_job_status
 from app.models import ImportFieldMapping, SourceImportRequest
 from app.security import AuthContext
 
@@ -164,5 +164,69 @@ def test_delete_source_removes_linked_imported_mentions():
 
         assert deleted["deleted"] is True
         assert deleted["deleted_mentions"] == 1
+
+    asyncio.run(run())
+
+
+def test_bootstrap_import_can_reuse_logical_source_id():
+    async def run():
+        first = SourceImportRequest(
+            business_id=uuid4(),
+            ingestion_method="json",
+            platform="2GIS",
+            display_name="2GIS — SDU University",
+            json_content=json.dumps([{"text": "Existing review", "id": "boot-1"}]),
+        )
+        initial = await import_source_data(first, _context())
+        source_id = initial.source["id"]
+
+        second = SourceImportRequest(
+            business_id=first.business_id,
+            source_id=source_id,
+            ingestion_method="json",
+            platform="2GIS",
+            source_url="https://2gis.kz/almaty/firm/70000001042393451/tab/reviews",
+            enable_automatic_sync=True,
+            json_content=json.dumps([{"text": "Existing review", "id": "boot-1"}, {"text": "New review", "id": "boot-2"}]),
+        )
+        followup = await import_source_data(second, _context())
+
+        assert followup.source["id"] == source_id
+        assert followup.source["source_url"] == "https://2gis.kz/almaty/firm/70000001042393451/tab/reviews"
+        assert followup.inserted == 1
+        assert followup.duplicates == 1
+        assert {item.mention.metadata["source_connection_id"] for item in followup.items} == {source_id}
+
+    asyncio.run(run())
+
+
+def test_large_import_returns_202_and_processes_batches(monkeypatch):
+    async def run():
+        monkeypatch.setenv("SOURCE_IMPORT_SYNC_LIMIT", "10")
+        rows = [{"text": f"Review {index}", "id": f"large-{index}"} for index in range(25)]
+        request = SourceImportRequest(
+            business_id=uuid4(),
+            ingestion_method="json",
+            platform="2GIS",
+            display_name="Large bootstrap",
+            json_content=json.dumps(rows),
+        )
+        response = await import_source_data(request, _context())
+
+        assert response.status_code == 202
+        body = json.loads(response.body)
+        assert body["total_read"] == 25
+        assert body["status"] in {"queued", "running"}
+
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            status = await source_import_job_status(body["job_id"], _context())
+            if status["status"] == "completed":
+                break
+
+        status = import_jobs[body["job_id"]]
+        assert status["status"] == "completed"
+        assert status["processed"] == 25
+        assert status["inserted"] == 25
 
     asyncio.run(run())

@@ -744,7 +744,8 @@ function addSourceModal() {
 function fileImportModal(kind){
   pendingSourceImport=null;
   const accept=kind==='csv'?'.csv,text/csv':'.json,application/json';
-  modal(`<div class="modal-head"><div><h2>Upload ${kind.toUpperCase()}</h2><p>Preview the file, map fields, then import through SARAP analysis.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source-import" data-kind="${kind}"><div class="field-grid"><div class="field"><label>What platform is this data from?</label><select name="platform">${importPlatforms.map(value=>`<option>${value}</option>`).join('')}</select></div><div class="field"><label>Display name</label><input name="displayName" placeholder="${kind.toUpperCase()} Import — reviews"></div></div><label class="toggle-inline"><input type="checkbox" name="useSourceFromFile"> Use source from file when mapped</label><div class="field"><label>${kind.toUpperCase()} file</label><input name="file" type="file" accept="${accept}" required data-import-file></div><div data-import-preview class="import-preview-empty">Choose a file to inspect columns and preview rows.</div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="connect-source">Back</button><button class="btn btn-primary">Import</button></div></form>`);
+  const existingOptions=state.sources.filter(source=>source.backendId||source.id).map(source=>`<option value="${escapeHtml(source.backendId||source.id)}">${escapeHtml(source.displayName||source.name)}</option>`).join('');
+  modal(`<div class="modal-head"><div><h2>Upload ${kind.toUpperCase()}</h2><p>Preview the file, map fields, then import through SARAP analysis.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source-import" data-kind="${kind}"><div class="field"><label>Logical source</label><select name="sourceId"><option value="">Create a new source</option>${existingOptions}</select></div><div class="field-grid"><div class="field"><label>What platform is this data from?</label><select name="platform">${importPlatforms.map(value=>`<option>${value}</option>`).join('')}</select></div><div class="field"><label>Display name</label><input name="displayName" placeholder="2GIS — SDU University"></div></div><div class="field"><label>Online source URL <span class="muted">optional, for later sync</span></label><input name="sourceUrl" type="url" placeholder="https://2gis.kz/..."></div><label class="toggle-inline"><input type="checkbox" name="enableAutomaticSync"> Enable automatic sync after bootstrap import</label><label class="toggle-inline"><input type="checkbox" name="useSourceFromFile"> Use source from file when mapped</label><div class="field"><label>${kind.toUpperCase()} file</label><input name="file" type="file" accept="${accept}" required data-import-file></div><div data-import-preview class="import-preview-empty">Choose a file to inspect columns and preview rows.</div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="connect-source">Back</button><button class="btn btn-primary">Import</button></div></form>`);
 }
 
 function manualSourceModal(){
@@ -1044,11 +1045,16 @@ document.addEventListener('submit', async e => {
     if(!mapping.text){toast('Text mapping required','Choose the column that contains review or comment text.');return;}
     form.classList.add('loading');
     try{
-      const body={business_id:state.business.id,ingestion_method:form.dataset.kind,platform:data.platform,use_source_from_file:Boolean(data.useSourceFromFile),display_name:data.displayName||`${form.dataset.kind.toUpperCase()} Import`,filename:pendingSourceImport.filename,mapping};
+      const body={business_id:state.business.id,source_id:data.sourceId||null,ingestion_method:form.dataset.kind,platform:data.platform,source_url:data.sourceUrl||null,enable_automatic_sync:Boolean(data.enableAutomaticSync),use_source_from_file:Boolean(data.useSourceFromFile),display_name:data.displayName||`${form.dataset.kind.toUpperCase()} Import`,filename:pendingSourceImport.filename,mapping};
       if(form.dataset.kind==='csv')body.csv_content=pendingSourceImport.content;else body.json_content=pendingSourceImport.content;
       const response=await fetch(apiPath('/api/sources/import'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify(body)});
       const result=await response.json();if(!response.ok)throw new Error(result.detail||'Import failed');
       if(result.source)state.sources=uniqueSources([...state.sources,mapStoredSource(result.source)]);
+      if(response.status===202){
+        closeModal();render();
+        toast('Import started',`${result.total_read} rows queued. Job ${result.job_id} is processing in batches.`);
+        return;
+      }
       closeModal();await loadProductData();await loadAnalyticsData(result.inserted>0);render();
       toast('Import complete',`${result.total_read} read · ${result.inserted} inserted · ${result.duplicates} duplicate${result.duplicates===1?'':'s'} skipped · ${result.invalid+result.failed} failed/invalid.`);
     }catch(error){form.classList.remove('loading');toast('Could not import file',friendlyError(error));}

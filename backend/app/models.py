@@ -151,8 +151,11 @@ class ImportFieldMapping(BaseModel):
 
 class SourceImportRequest(BaseModel):
     business_id: UUID
+    source_id: str | None = None
     ingestion_method: str = Field(pattern="^(csv|json|manual)$")
     platform: str = "Other"
+    source_url: HttpUrl | None = None
+    enable_automatic_sync: bool = False
     use_source_from_file: bool = False
     display_name: str | None = Field(default=None, max_length=200)
     filename: str | None = Field(default=None, max_length=240)
@@ -165,6 +168,9 @@ class SourceImportRequest(BaseModel):
 
 class SourceImportResult(BaseModel):
     source: dict[str, Any] | None = None
+    job_id: str | None = None
+    status: str = "completed"
+    processed: int | None = None
     total_read: int
     inserted: int
     duplicates: int
