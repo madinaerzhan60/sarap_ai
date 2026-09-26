@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from html.parser import HTMLParser
+from urllib.parse import urlencode
 
 import httpx
 
@@ -38,23 +39,24 @@ class ZenRowsTwoGisConnector(BaseConnector):
             raise ProviderNotConfigured("ZENROWS_API_KEY is empty")
 
         timeout = _timeout_seconds(backfill=backfill)
-        payload = {
+        params = {
             "url": self.page_url,
             "apikey": api_key,
-            "js_render": True,
-            "premium_proxy": True,
+            "js_render": "true",
+            "premium_proxy": "true",
             "js_instructions": json.dumps(_zenrows_js_instructions(backfill=backfill)),
         }
+        _validate_query_size(params)
         started_at = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-                response = await client.post(_zenrows_fetch_endpoint(), json=payload)
+                response = await client.get(_zenrows_endpoint(), params=params)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
             elapsed = time.monotonic() - started_at
             raise ProviderError(f"zenrows: {_safe_exception_detail(exc, elapsed)}") from exc
 
-        html = _zenrows_response_text(response).strip()
+        html = response.text.strip()
         if not html:
             raise ProviderError("zenrows: empty response")
         content_type = response.headers.get("content-type", "")
@@ -120,26 +122,18 @@ def _timeout_seconds(*, backfill: bool = False) -> float:
     return timeout
 
 
-def _zenrows_fetch_endpoint() -> str:
-    return os.getenv("ZENROWS_FETCH_ENDPOINT", "https://api.zenrows.com/v1/fetch").strip() or "https://api.zenrows.com/v1/fetch"
+def _zenrows_endpoint() -> str:
+    return os.getenv("ZENROWS_ENDPOINT", "https://api.zenrows.com/v1/").strip() or "https://api.zenrows.com/v1/"
 
 
-def _zenrows_response_text(response: httpx.Response) -> str:
-    content_type = response.headers.get("content-type", "")
-    if "json" not in content_type.casefold():
-        return response.text
-    try:
-        payload = response.json()
-    except ValueError:
-        return response.text
-    if isinstance(payload, str):
-        return payload
-    if isinstance(payload, dict):
-        for key in ("html", "content", "body", "data", "text", "result"):
-            value = payload.get(key)
-            if isinstance(value, str):
-                return value
-    return response.text
+def _validate_query_size(params: dict[str, str]) -> None:
+    js_length = len(params.get("js_instructions", "").encode("utf-8"))
+    safe_params = {key: ("<redacted>" if key == "apikey" else value) for key, value in params.items()}
+    query_length = len(urlencode(params).encode("utf-8"))
+    logger.info("zenrows_twogis request query_bytes=%s js_instruction_bytes=%s", query_length, js_length)
+    if query_length > int(os.getenv("ZENROWS_MAX_QUERY_BYTES", "12000")):
+        safe_query_length = len(urlencode(safe_params).encode("utf-8"))
+        raise ProviderError(f"zenrows: query_too_long query_bytes={safe_query_length} js_instruction_bytes={js_length}")
 
 
 def _scroll_wait_ms() -> int:
@@ -233,11 +227,10 @@ const liveCards = Array.from(document.querySelectorAll('div._1rowqpjv'))
   }
 }
 """.strip()
-    if backfill:
-        scroll_count = _scroll_count(backfill=True)
-        no_growth_limit = _no_growth_limit()
-        indented_collect_script = collect_script.replace("\n", "\n    ")
-        backfill_script = f"""
+    scroll_count = _scroll_count(backfill=backfill)
+    no_growth_limit = _no_growth_limit() if backfill else 2
+    indented_collect_script = collect_script.replace("\n", "\n    ")
+    scroll_loop_script = f"""
 (async () => {{
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const collectCurrentReviewCards = () => {{
@@ -288,28 +281,7 @@ const liveCards = Array.from(document.querySelectorAll('div._1rowqpjv'))
   }}
 }})();
 """.strip()
-        instructions.append({"evaluate": backfill_script})
-        return instructions
-
-    scroll_script = collect_script + """
-const cards = Array.from(document.querySelectorAll('div._1rowqpjv'))
-  .filter((card) => !card.closest('[data-sarap-accumulated-reviews="true"]'));
-if (cards.length) {
-  cards[cards.length - 1].scrollIntoView({block: 'end'});
-} else {
-  const candidates = Array.from(document.querySelectorAll('main, [data-scroll="true"], div'))
-    .filter((el) => el.scrollHeight > el.clientHeight + 200)
-    .sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
-  if (candidates[0]) {
-    candidates[0].scrollTop += 1400;
-  }
-  window.scrollBy(0, 1400);
-}
-""".strip()
-    for _ in range(_scroll_count(backfill=backfill)):
-        instructions.append({"evaluate": scroll_script})
-        instructions.append({"wait": wait_ms})
-    instructions.append({"evaluate": collect_script})
+    instructions.append({"evaluate": scroll_loop_script})
     return instructions
 
 

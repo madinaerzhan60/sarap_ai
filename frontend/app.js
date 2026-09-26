@@ -101,6 +101,7 @@ let currentSettingsTab = 'Business profile';
 let authReady = false;
 let authSubscription = null;
 let pendingExtractedReviews = [];
+const syncingSourceIds = new Set();
 
 function loadState() {
   try {
@@ -392,7 +393,7 @@ function mentions(){
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
 
 function sources() {
-  return pageHead('Sources','Connect pages and collect new public feedback.','<button class="btn btn-primary" data-action="connect-source">+ Add source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>`<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong>${escapeHtml(s.name)}</strong><small>${escapeHtml(s.method||s.kind)}</small></div><span class="status ${s.state}">${escapeHtml(s.status)}</span></div><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Items</span><strong>${s.items==null?'—':s.items}</strong></div><div><span>Last checked</span><strong>${escapeHtml(s.last)}</strong></div></div><div class="source-actions">${s.kind!=='Imported'?`<button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}">Sync</button>`:'<button class="btn btn-secondary" data-action="manual-import">Import feedback</button>'}<button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button></div></article>`).join('')}</section>`:emptyState('No sources connected','Add a public page, connected account or manual import.','connect-source','Add source'));
+  return pageHead('Sources','Connect pages and collect new public feedback.','<button class="btn btn-primary" data-action="connect-source">+ Add source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>{const syncing=syncingSourceIds.has(s.id);return `<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong>${escapeHtml(s.name)}</strong><small>${escapeHtml(s.method||s.kind)}</small></div><span class="status ${syncing?'':s.state}">${escapeHtml(syncing?'Syncing':s.status)}</span></div><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Items</span><strong>${s.items==null?'—':s.items}</strong></div><div><span>Last checked</span><strong>${escapeHtml(s.last)}</strong></div></div><div class="source-actions">${s.kind!=='Imported'?`<button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}" ${syncing?'disabled':''}>${syncing?'Syncing...':'Sync'}</button>`:'<button class="btn btn-secondary" data-action="manual-import">Import feedback</button>'}<button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button></div></article>`}).join('')}</section>`:emptyState('No sources connected','Add a public page, connected account or manual import.','connect-source','Add source'));
 }
 
 function discover() {
@@ -476,8 +477,10 @@ async function pollBackendSource(source) {
   source.state=body.status==='success'?'live':'';
   if(!state.session?.demo){
     try{
+      const workspace=await loadWorkspace();
+      applyWorkspace(workspace);
       await loadProductData();
-      await loadAnalyticsData(added>0);
+      await loadAnalyticsData(true);
     }catch(error){console.warn('Collection succeeded, but workspace refresh failed:',error);}
   }
   saveState(); render();
@@ -864,8 +867,10 @@ document.addEventListener('click', async e => {
   }
   if(action==='poll-source'){
     const source=state.sources.find(x=>x.id===target.dataset.id);if(!source)return;
-    target.disabled=true;let progress=8;target.textContent=`Collecting ${progress}%`;const timer=setInterval(()=>{progress=Math.min(90,progress+Math.max(1,Math.round((92-progress)*.12)));target.textContent=`Collecting ${progress}%`;},700);
-    try{await pollBackendSource(source);}catch(error){source.errors+=1;source.status='Needs attention';source.state='high';saveState();render();toast('Collection unavailable',error.message);}finally{clearInterval(timer);}
+    if(syncingSourceIds.has(source.id))return;
+    syncingSourceIds.add(source.id);saveState();render();
+    let progress=8;target.disabled=true;target.textContent=`Collecting ${progress}%`;const timer=setInterval(()=>{progress=Math.min(90,progress+Math.max(1,Math.round((92-progress)*.12)));const button=document.querySelector(`[data-action="poll-source"][data-id="${CSS.escape(source.id)}"]`);if(button)button.textContent=`Collecting ${progress}%`;},700);
+    try{await pollBackendSource(source);}catch(error){source.errors+=1;source.status='Needs attention';source.state='high';saveState();render();toast('Collection unavailable',error.message);}finally{clearInterval(timer);syncingSourceIds.delete(source.id);render();}
   }
   if(action==='add-mention')addMentionModal();
   if(action==='manual-import')manualImportModal();
