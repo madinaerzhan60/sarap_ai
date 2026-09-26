@@ -554,6 +554,14 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
 .source-stats strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .source-actions { display:flex; justify-content:flex-end; gap:5px; margin-top:11px; padding-top:10px; border-top:1px solid var(--line); }
 .source-actions .btn { padding:8px 10px; }
+.source-method-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.source-method { text-align:left; padding:15px; border:1px solid var(--line); border-radius:8px; background:rgba(255,255,255,.55); color:var(--ink); cursor:pointer; }
+.source-method strong, .source-method small { display:block; }
+.source-method small { margin-top:5px; color:var(--muted); line-height:1.35; }
+.toggle-inline { display:flex; align-items:center; gap:8px; margin:10px 0; color:var(--muted); font-size:11px; }
+.import-preview-empty { padding:14px; border:1px dashed var(--line); border-radius:8px; color:var(--muted); }
+.import-preview table { font-size:10px; }
+.import-preview + .field-grid .field select + select { margin-top:6px; }
 @media (max-width:760px){.source-grid,.onboarding-source-actions{grid-template-columns:1fr}}
 
 /* Mention intelligence table */
@@ -815,4 +823,3 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
   display: block;
   line-height: 1.35;
 }
-

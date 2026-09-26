@@ -101,6 +101,7 @@ let currentSettingsTab = 'Business profile';
 let authReady = false;
 let authSubscription = null;
 let pendingExtractedReviews = [];
+let pendingSourceImport = null;
 const syncingSourceIds = new Set();
 
 function loadState() {
@@ -414,7 +415,7 @@ function mentions(){
 function progressRow(name,count,total,color){const pct=Math.round(count/Math.max(total,1)*100);return `<div class="progress-row"><div><span>${escapeHtml(name)}</span><strong>${count} · ${pct}%</strong></div><i><b style="width:${pct}%;background:${color}"></b></i></div>`;}
 
 function sources() {
-  return pageHead('Sources','Connect pages and collect new public feedback.','<button class="btn btn-primary" data-action="connect-source">+ Add source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>{const syncing=syncingSourceIds.has(s.id);return `<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong>${escapeHtml(s.name)}</strong><small>${escapeHtml(s.method||s.kind)}</small></div><span class="status ${syncing?'':s.state}">${escapeHtml(syncing?'Syncing':s.status)}</span></div><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Items</span><strong>${s.items==null?'—':s.items}</strong></div><div><span>Last checked</span><strong>${escapeHtml(s.last)}</strong></div></div><div class="source-actions">${s.kind!=='Imported'?`<button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}" ${syncing?'disabled':''}>${syncing?'Syncing...':'Sync'}</button>`:'<button class="btn btn-secondary" data-action="manual-import">Import feedback</button>'}<button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button></div></article>`}).join('')}</section>`:emptyState('No sources connected','Add a public page, connected account or manual import.','connect-source','Add source'));
+  return pageHead('Sources','Connect pages, upload files, or add individual mentions through one ingestion pipeline.','<button class="btn btn-primary" data-action="connect-source">+ Add source</button>')+(state.sources.length?`<section class="grid source-grid">${state.sources.map(s=>{const syncing=syncingSourceIds.has(s.id);const method=s.ingestionMethod||s.method||s.kind;return `<article class="source-card glass"><div class="source-head"><div class="source-icon">${sourceIcon(s.name)}</div><div><strong>${escapeHtml(s.displayName||s.name)}</strong><small>${escapeHtml(s.name)} · ${escapeHtml(method)}</small></div><span class="status ${syncing?'':s.state}">${escapeHtml(syncing?'Syncing':s.status)}</span></div><p>${escapeHtml(s.description)}</p><div class="source-stats"><div><span>Items</span><strong>${s.items==null?'—':s.items}</strong></div><div><span>Last sync/import</span><strong>${escapeHtml(s.last)}</strong></div></div><div class="source-actions">${s.kind!=='Imported'&&s.ingestionMethod!=='manual'?`<button class="btn btn-secondary" data-action="poll-source" data-id="${escapeHtml(s.id)}" ${syncing?'disabled':''}>${syncing?'Syncing...':'Sync'}</button>`:`<button class="btn btn-secondary" data-action="${s.ingestionMethod==='json'?'upload-json':s.ingestionMethod==='csv'?'upload-csv':'add-manual-source'}">Import again</button>`}<button class="btn btn-quiet" data-route="mentions">View data</button><button class="btn btn-quiet" data-action="edit-source" data-id="${escapeHtml(s.id)}">Edit</button><button class="btn btn-quiet" data-action="delete-source" data-id="${escapeHtml(s.id)}">Delete</button></div></article>`}).join('')}</section>`:emptyState('No sources connected','Add an online source, upload CSV/JSON, or enter one mention manually.','connect-source','Add source'));
 }
 
 function discover() {
@@ -525,8 +526,9 @@ function mapStoredSource(source, previous=null) {
   const isTwoGis=String(source.source||'').toLowerCase().includes('2gis');
   const description=(source.error_message?friendlyError(source.error_message):'')||source.source_url||(isTwoGis?'Add the 2GIS business page URL to test collection.':status==='OAuth required'?'Connect the official account in source settings':'Choose the business page to finish setup');
   const activeCollector=collectorLabels[String(source.active_collection_method||'').toLowerCase()];
-  const method=kind==='Imported'?'Import':activeCollector?`Collected by ${activeCollector}`:labels[source.collection_mode]||'Auto';
-  return {id:source.id,dbId:source.id,backendId:source.id,name:source.source,kind,collectionMode:source.collection_mode,method,status,state,description,sourceUrl:source.source_url||'',last:source.last_checked_at?new Date(source.last_checked_at).toLocaleString():'—',next:source.next_check_at?new Date(source.next_check_at).toLocaleString():'—',items:Number.isFinite(source.item_count)?source.item_count:(previous?.items??null),errors:source.error_message?1:0};
+  const ingestionMethod=source.active_collection_method||source.ingestion_method||source.collection_mode;
+  const method=kind==='Imported'?String(ingestionMethod||'Import').toUpperCase():activeCollector?`Collected by ${activeCollector}`:labels[source.collection_mode]||'Auto';
+  return {id:source.id,dbId:source.id,backendId:source.id,name:source.source,displayName:source.display_name||source.source,kind,ingestionMethod,collectionMode:source.collection_mode,method,status,state,description,sourceUrl:source.source_url||'',last:source.last_checked_at?new Date(source.last_checked_at).toLocaleString():'—',next:source.next_check_at?new Date(source.next_check_at).toLocaleString():'—',items:Number.isFinite(source.item_count)?source.item_count:(previous?.items??null),errors:source.error_message?1:0};
 }
 function uniqueSources(items) {
   const seen=new Set();
@@ -739,6 +741,16 @@ function addSourceModal() {
   modal(`<div class="modal-head"><div><h2>Add source</h2><p>Connect the page you want SARAP to monitor.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source"><input type="hidden" name="method" value="auto"><div class="field"><label>Source</label><select name="name" data-source-select><option>2GIS</option><option>Yandex Maps</option><option>Google Business</option><option>Instagram</option><option>Threads</option><option>LinkedIn</option><option>YouTube</option><option>Telegram</option><option>Website / RSS</option><option>Manual import</option></select></div><div class="field"><label>Business or handle <span class="muted">(optional)</span></label><input name="query" value="${escapeHtml(state.business.name)}" placeholder="Business name or @handle"></div><div class="field"><label>Page URL</label><input name="url" type="url" required placeholder="${escapeHtml(sourcePlaceholder('2GIS'))}"><small data-source-hint>${escapeHtml(sourceHint('2GIS'))}</small></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button><button class="btn btn-primary">Add source</button></div></form>`);
 }
 
+function fileImportModal(kind){
+  pendingSourceImport=null;
+  const accept=kind==='csv'?'.csv,text/csv':'.json,application/json';
+  modal(`<div class="modal-head"><div><h2>Upload ${kind.toUpperCase()}</h2><p>Preview the file, map fields, then import through SARAP analysis.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source-import" data-kind="${kind}"><div class="field-grid"><div class="field"><label>What platform is this data from?</label><select name="platform">${importPlatforms.map(value=>`<option>${value}</option>`).join('')}</select></div><div class="field"><label>Display name</label><input name="displayName" placeholder="${kind.toUpperCase()} Import — reviews"></div></div><label class="toggle-inline"><input type="checkbox" name="useSourceFromFile"> Use source from file when mapped</label><div class="field"><label>${kind.toUpperCase()} file</label><input name="file" type="file" accept="${accept}" required data-import-file></div><div data-import-preview class="import-preview-empty">Choose a file to inspect columns and preview rows.</div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="connect-source">Back</button><button class="btn btn-primary">Import</button></div></form>`);
+}
+
+function manualSourceModal(){
+  modal(`<div class="modal-head"><div><h2>Add manually</h2><p>Add one mention through the same SARAP pipeline.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="source-manual"><div class="field-grid"><div class="field"><label>Platform</label><select name="platform">${importPlatforms.map(value=>`<option>${value}</option>`).join('')}</select></div><div class="field"><label>Type</label><select name="contentType"><option value="review">review</option><option value="comment">comment</option><option value="video_comment">video_comment</option><option value="post">post</option><option value="news_article">news_article</option><option value="mention">mention</option></select></div></div><div class="field-grid"><div class="field"><label>Author</label><input name="author"></div><div class="field"><label>Rating optional</label><input name="rating" type="number" min="0" max="5" step="0.1"></div></div><div class="field"><label>Text</label><textarea name="text" required></textarea></div><div class="field-grid"><div class="field"><label>Published date optional</label><input name="published_at" type="datetime-local"></div><div class="field"><label>URL optional</label><input name="source_url" type="url"></div></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="connect-source">Back</button><button class="btn btn-primary">Import</button></div></form>`);
+}
+
 function sourcePlaceholder(name){
   const values={'2GIS':'https://2gis.kz/almaty/firm/123…','Yandex Maps':'https://yandex.kz/maps/org/…','Google Business':'https://maps.google.com/…','Instagram':'https://instagram.com/brand','Threads':'https://threads.net/@brand','LinkedIn':'https://linkedin.com/company/brand','YouTube':'https://youtube.com/@channel','Telegram':'https://t.me/channel','Website / RSS':'https://example.com/feed.xml'};
   return values[name]||'';
@@ -772,6 +784,40 @@ function providerSearchUrl(provider,query,city){
   if(provider==='Telegram')return `https://www.google.com/search?q=${encodeURIComponent(`site:t.me ${term}`)}`;
   if(provider==='YouTube')return `https://www.youtube.com/results?search_query=${encoded}`;
   return `https://www.google.com/search?q=${encoded}`;
+}
+const importPlatforms=['2GIS','Instagram','Facebook','YouTube','Yandex Maps','Google Maps','Other'];
+const importFields=['','text','author','rating','published_at','external_id','source_url','content_type','source'];
+const fieldAliases={text:['text','review','comment','content','body','review_text'],author:['author','username','user','reviewer','name'],rating:['rating','stars','score'],published_at:['date','created_at','published_at','timestamp'],external_id:['id','review_id','comment_id','external_id'],source_url:['url','link','source_url'],content_type:['content_type','type'],source:['source','platform']};
+function parseCsvPreview(text){
+  const lines=text.replace(/^\uFEFF/,'').split(/\r?\n/).filter(line=>line.trim());
+  if(!lines.length)return {fields:[],rows:[]};
+  const split=line=>line.split(',').map(value=>value.trim().replace(/^"|"$/g,''));
+  const fields=split(lines[0]);
+  return {fields,rows:lines.slice(1,201).map(line=>Object.fromEntries(split(line).map((value,index)=>[fields[index]||`field_${index+1}`,value])))};
+}
+function parseJsonPreview(text){
+  const payload=JSON.parse(text);
+  let rows=Array.isArray(payload)?payload:null;
+  if(!rows&&payload&&typeof payload==='object')for(const key of ['items','reviews','comments','data'])if(Array.isArray(payload[key]))rows=payload[key];
+  rows=(rows||[]).filter(row=>row&&typeof row==='object').slice(0,200);
+  const fields=[...new Set(rows.flatMap(row=>Object.keys(row)))];
+  return {fields,rows};
+}
+function guessImportMapping(fields){
+  const lower=Object.fromEntries(fields.map(field=>[field.toLowerCase(),field]));
+  const result={};
+  Object.entries(fieldAliases).forEach(([target,aliases])=>{const hit=aliases.find(alias=>lower[alias]);if(hit)result[target]=lower[hit];});
+  return result;
+}
+function mappingSelect(target,fields,mapping){
+  return `<div class="field"><label>${target}${target==='text'?' *':''}</label><select name="map_${target}">${importFields.filter(value=>!value||value===target).map(value=>`<option value="${value}" ${value===target?'selected':''}>${value||'Do not import'}</option>`).join('')}</select><select name="column_${target}"><option value="">Choose column</option>${fields.map(field=>`<option value="${escapeHtml(field)}" ${mapping[target]===field?'selected':''}>${escapeHtml(field)}</option>`).join('')}</select></div>`;
+}
+function importPreviewHtml(kind,platform,filename,fields,rows,mapping){
+  const previewRows=rows.slice(0,5).map(row=>`<tr>${fields.slice(0,6).map(field=>`<td>${escapeHtml(String(row[field]??''))}</td>`).join('')}</tr>`).join('');
+  return `<div class="summary"><strong>${rows.length} rows detected</strong><br>${escapeHtml(filename||kind.toUpperCase())} · ${fields.length} fields · ${escapeHtml(platform)}</div><div class="table-wrap import-preview"><table><thead><tr>${fields.slice(0,6).map(field=>`<th>${escapeHtml(field)}</th>`).join('')}</tr></thead><tbody>${previewRows}</tbody></table></div><div class="field-grid">${['text','author','rating','published_at','external_id','source_url','content_type','source'].map(target=>mappingSelect(target,fields,mapping)).join('')}</div>`;
+}
+function addSourceMethodModal(){
+  modal(`<div class="modal-head"><div><h2>Add source</h2><p>How do you want to add data?</p></div><button class="close" data-action="close-modal">×</button></div><div class="source-method-grid"><button class="source-method" data-action="online-source"><strong>Connect online source</strong><small>2GIS, Instagram, Facebook, YouTube, Yandex or another URL</small></button><button class="source-method" data-action="upload-csv"><strong>Upload CSV</strong><small>Preview, map columns, import through SARAP analysis</small></button><button class="source-method" data-action="upload-json"><strong>Upload JSON</strong><small>Arrays or items/reviews/comments/data exports</small></button><button class="source-method" data-action="add-manual-source"><strong>Add manually</strong><small>One review, comment or mention</small></button></div>`);
 }
 function manualImportModal(){
   modal(`<div class="modal-head"><div><h2>Manual import</h2><p>Paste one customer message or upload a CSV with a text column.</p></div><button class="close" data-action="close-modal">×</button></div><form data-form="manual-import"><div class="field"><label>Paste customer feedback</label><textarea name="text" placeholder="Очень плохое обслуживание..."></textarea></div><div class="field"><label>Upload CSV <span class="muted">text required; author, rating, published_at, source and url optional</span></label><input name="csvFile" type="file" accept=".csv,text/csv"></div><div class="form-actions"><button type="button" class="btn btn-secondary" data-action="close-modal">Cancel</button><button class="btn btn-primary">Import and analyze</button></div></form>`);
@@ -864,7 +910,11 @@ document.addEventListener('click', async e => {
   if(action==='close-modal')closeModal();
   if(action==='copy-reply'){await navigator.clipboard?.writeText(target.dataset.text);toast('Copied','Review the response before sending.');closeModal();}
   if(action==='regenerate-reply'){try{await smartReply(target.dataset.id,true);toast('Reply regenerated','A fresh draft is ready to edit.');}catch(error){toast('Reply unavailable',friendlyError(error));}}
-  if(action==='connect-source'||action==='onboarding-add-source')addSourceModal();
+  if(action==='connect-source'||action==='onboarding-add-source')addSourceMethodModal();
+  if(action==='online-source'){closeModal();addSourceModal();}
+  if(action==='upload-csv'){closeModal();fileImportModal('csv');}
+  if(action==='upload-json'){closeModal();fileImportModal('json');}
+  if(action==='add-manual-source'){closeModal();manualSourceModal();}
   if(action==='connect-telegram'){
     target.disabled=true;
     try{const response=await fetch(apiPath(`/api/telegram/connect?business_id=${encodeURIComponent(state.business.id)}`),{method:'POST',headers:await apiAuthHeaders()});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Telegram connection is unavailable');window.open(body.url,'_blank','noopener,noreferrer');toast('Telegram opened','Press Start in the SARAP bot. Your chat will connect automatically.');}catch(error){toast('Could not connect Telegram',error.message);}finally{target.disabled=false;}
@@ -872,10 +922,14 @@ document.addEventListener('click', async e => {
   if(action==='edit-source'){const source=state.sources.find(item=>item.id===target.dataset.id);if(source)editSourceModal(source);}
   if(action==='delete-source'){
     const source=state.sources.find(item=>item.id===target.dataset.id);if(!source)return;
-    if(!confirm(`Delete ${source.name} source?`))return;
+    const itemCount=source.items==null?'all linked':source.items;
+    if(!confirm(`Delete ${source.displayName||source.name}?\n\nThis will remove the source and ${itemCount} collected/imported item${itemCount===1?'':'s'} linked to it. Analytics will update after deletion.`))return;
     try{
-      if(!state.session?.demo){const response=await fetch(apiPath(`/api/sources/${encodeURIComponent(source.id)}`),{method:'DELETE',headers:await apiAuthHeaders()});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Could not delete source');}
-      state.sources=state.sources.filter(item=>item.id!==source.id);saveState();render();toast('Source deleted',`${source.name} was removed.`);
+      let deletedMentions=source.items||0;
+      if(!state.session?.demo){const response=await fetch(apiPath(`/api/sources/${encodeURIComponent(source.id)}`),{method:'DELETE',headers:await apiAuthHeaders()});const body=await response.json();if(!response.ok)throw new Error(body.detail||'Could not delete source');deletedMentions=Number(body.deleted_mentions||0);}
+      state.sources=state.sources.filter(item=>item.id!==source.id);saveState();render();
+      if(!state.session?.demo){await loadProductData();await loadAnalyticsData(true);render();}
+      toast('Source deleted',`${source.name} and ${deletedMentions} linked item${deletedMentions===1?'':'s'} were removed.`);
     }catch(error){toast('Could not delete source',error.message);}
   }
   if(action==='search-provider'){
@@ -982,6 +1036,34 @@ document.addEventListener('submit', async e => {
       closeModal();saveState();render();toast('Source updated','Collection state was reset. Test collection again.');
     }catch(error){toast('Could not update source',error.message);}
   }
+  if(kind==='source-import'){
+    if(!pendingSourceImport){toast('File preview required','Choose a file and confirm the field mapping first.');return;}
+    const data=fieldData(form);
+    const mapping={};
+    ['text','author','rating','published_at','external_id','source_url','content_type','source'].forEach(target=>{const column=data[`column_${target}`];if(column)mapping[target]=column;});
+    if(!mapping.text){toast('Text mapping required','Choose the column that contains review or comment text.');return;}
+    form.classList.add('loading');
+    try{
+      const body={business_id:state.business.id,ingestion_method:form.dataset.kind,platform:data.platform,use_source_from_file:Boolean(data.useSourceFromFile),display_name:data.displayName||`${form.dataset.kind.toUpperCase()} Import`,filename:pendingSourceImport.filename,mapping};
+      if(form.dataset.kind==='csv')body.csv_content=pendingSourceImport.content;else body.json_content=pendingSourceImport.content;
+      const response=await fetch(apiPath('/api/sources/import'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify(body)});
+      const result=await response.json();if(!response.ok)throw new Error(result.detail||'Import failed');
+      if(result.source)state.sources=uniqueSources([...state.sources,mapStoredSource(result.source)]);
+      closeModal();await loadProductData();await loadAnalyticsData(result.inserted>0);render();
+      toast('Import complete',`${result.total_read} read · ${result.inserted} inserted · ${result.duplicates} duplicate${result.duplicates===1?'':'s'} skipped · ${result.invalid+result.failed} failed/invalid.`);
+    }catch(error){form.classList.remove('loading');toast('Could not import file',friendlyError(error));}
+  }
+  if(kind==='source-manual'){
+    const data=fieldData(form);if(!String(data.text||'').trim()){toast('Text required','Add the mention text before importing.');return;}
+    form.classList.add('loading');
+    try{
+      const item={text:String(data.text).trim(),author:data.author||'',rating:data.rating||'',published_at:data.published_at||'',source_url:data.source_url||'',external_id:`manual-${crypto.randomUUID()}`};
+      const response=await fetch(apiPath('/api/sources/import'),{method:'POST',headers:{'Content-Type':'application/json',...(await apiAuthHeaders())},body:JSON.stringify({business_id:state.business.id,ingestion_method:'manual',platform:data.platform,display_name:'Manual entries',manual_item:item,default_content_type:data.contentType,mapping:{text:'text',author:'author',rating:'rating',published_at:'published_at',source_url:'source_url',external_id:'external_id'}})});
+      const result=await response.json();if(!response.ok)throw new Error(result.detail||'Import failed');
+      if(result.source)state.sources=uniqueSources([...state.sources,mapStoredSource(result.source)]);
+      closeModal();await loadProductData();await loadAnalyticsData(result.inserted>0);render();toast('Manual entry imported',`${result.inserted} inserted, ${result.duplicates} duplicate skipped.`);
+    }catch(error){form.classList.remove('loading');toast('Could not import entry',friendlyError(error));}
+  }
   if(kind==='manual-import'){
     const data=new FormData(form), file=data.get('csvFile'), text=String(data.get('text')||'').trim();let csvContent='';
     if(file instanceof File&&file.size)csvContent=await file.text();
@@ -1006,6 +1088,21 @@ document.addEventListener('input',e=>{if(e.target.id==='mention-search'){const q
 document.addEventListener('change',e=>{
 
   if(e.target.matches('[data-mention-filter]')){mentionFilters[e.target.dataset.mentionFilter]=e.target.value;render();}
+
+  if(e.target.matches('[data-import-file]')){
+    const form=e.target.closest('form'), file=e.target.files?.[0], preview=form?.querySelector('[data-import-preview]'), kind=form?.dataset.kind;
+    if(!file||!preview)return;
+    if(file.size>2_000_000){preview.innerHTML='<p class="form-note">File is larger than the 2 MB import limit.</p>';pendingSourceImport=null;return;}
+    file.text().then(content=>{
+      try{
+        const parsed=kind==='csv'?parseCsvPreview(content):parseJsonPreview(content);
+        const mapping=guessImportMapping(parsed.fields);
+        pendingSourceImport={kind,filename:file.name,content,fields:parsed.fields,rows:parsed.rows,mapping};
+        const platform=form.querySelector('[name="platform"]')?.value||'Other';
+        preview.innerHTML=importPreviewHtml(kind,platform,file.name,parsed.fields,parsed.rows,mapping);
+      }catch(error){pendingSourceImport=null;preview.innerHTML=`<p class="form-note">${escapeHtml(error.message||'Could not parse file')}</p>`;}
+    }).catch(()=>{pendingSourceImport=null;if(preview)preview.innerHTML='<p class="form-note">Could not read this file.</p>';});
+  }
 
   if(e.target.matches('[data-source-select]')){
     const form=e.target.closest('form'), name=e.target.value, url=form?.querySelector('[name="url"]'), hint=form?.querySelector('[data-source-hint]'), method=form?.querySelector('[name="method"]');

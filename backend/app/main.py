@@ -13,6 +13,7 @@ import re
 from collections import Counter
 from datetime import datetime, time, timezone
 from datetime import date, timedelta
+from typing import Any
 from uuid import UUID
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
@@ -26,7 +27,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 from app.connectors.reviews import ConnectorUnavailable, normalize_twogis_business_url
 from app.collectors.registry import collector_registry
 from app.connectors.search import DiscoveryNotConfigured, DiscoveryService, canonical_url, fan_out
-from app.models import DiscoveryRequest, ExtractedReview, ManualImportRequest, MentionType, MentionUpdate, ProcessedMention, RawItem, ReplyDraftRequest, ReplyStatus, ReviewExtractionRequest, ReviewImportRequest, RiskResult, SourceCreate, SourceOAuthCredential, SourceUpdate
+from app.models import DiscoveryRequest, ExtractedReview, ImportFieldMapping, ManualImportRequest, MentionType, MentionUpdate, ProcessedMention, RawItem, ReplyDraftRequest, ReplyStatus, ReviewExtractionRequest, ReviewImportRequest, RiskResult, SourceCreate, SourceImportRequest, SourceImportResult, SourceOAuthCredential, SourceUpdate
 from app.services.llm import analyze_with_cascade, generate_reply_draft
 from app.services.normalization import normalize
 from app.services.dedupe import find_near_duplicate_group
@@ -332,6 +333,240 @@ async def manual_import(request: ManualImportRequest, context: AuthContext = Dep
     return results
 
 
+FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "text": ("text", "review", "comment", "content", "body", "review_text"),
+    "author": ("author", "username", "user", "reviewer", "name"),
+    "rating": ("rating", "stars", "score"),
+    "published_at": ("date", "created_at", "published_at", "timestamp"),
+    "external_id": ("id", "review_id", "comment_id", "external_id"),
+    "source_url": ("url", "link", "source_url"),
+    "source": ("source", "platform"),
+    "content_type": ("content_type", "type"),
+}
+
+
+PLATFORM_TYPES: dict[str, MentionType] = {
+    "2gis": MentionType.review,
+    "google maps": MentionType.review,
+    "yandex": MentionType.review,
+    "yandex maps": MentionType.review,
+    "instagram": MentionType.social_comment,
+    "facebook": MentionType.social_post,
+    "youtube": MentionType.video_comment,
+}
+
+
+CONTENT_TYPE_TO_MENTION: dict[str, MentionType] = {
+    "review": MentionType.review,
+    "comment": MentionType.social_comment,
+    "video_comment": MentionType.video_comment,
+    "post": MentionType.social_post,
+    "news_article": MentionType.news_article,
+    "mention": MentionType.web_page,
+}
+
+
+def _clean_platform(value: str | None) -> str:
+    value = (value or "Other").strip()
+    return value or "Other"
+
+
+def _guess_mapping(rows: list[dict[str, Any]], mapping: ImportFieldMapping) -> dict[str, str]:
+    fields = [str(key).strip() for row in rows[:20] for key in row.keys()]
+    lower_to_original = {field.casefold(): field for field in fields if field}
+    selected = mapping.model_dump(exclude_none=True)
+    guessed: dict[str, str] = {field: str(column) for field, column in selected.items() if column}
+    for target, aliases in FIELD_ALIASES.items():
+        if target in guessed:
+            continue
+        for alias in aliases:
+            if alias.casefold() in lower_to_original:
+                guessed[target] = lower_to_original[alias.casefold()]
+                break
+    return guessed
+
+
+def _json_import_rows(content: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(422, "JSON could not be parsed") from exc
+    rows: Any = payload
+    if isinstance(payload, dict):
+        for key in ("items", "reviews", "comments", "data"):
+            if isinstance(payload.get(key), list):
+                rows = payload[key]
+                break
+    if not isinstance(rows, list):
+        raise HTTPException(422, "JSON must be an array or contain items, reviews, comments, or data")
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _csv_import_rows(content: str) -> list[dict[str, Any]]:
+    try:
+        reader = csv.DictReader(io.StringIO(content))
+        if not reader.fieldnames:
+            raise HTTPException(422, "CSV must include a header row")
+        return [{str(key or "").strip(): value for key, value in row.items()} for row in reader]
+    except csv.Error as exc:
+        raise HTTPException(422, "CSV could not be parsed") from exc
+
+
+def _parse_rating(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        rating = float(str(value).strip())
+    except ValueError:
+        return None
+    return rating if 0 <= rating <= 5 else None
+
+
+def _parse_published(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    raw = str(value).strip()
+    for parser in (
+        lambda text: datetime.fromisoformat(text.replace("Z", "+00:00")),
+        lambda text: datetime.strptime(text, "%Y-%m-%d").replace(tzinfo=timezone.utc),
+    ):
+        try:
+            parsed = parser(raw)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _source_type(platform: str, content_type: str | None) -> MentionType:
+    if content_type and content_type in CONTENT_TYPE_TO_MENTION:
+        return CONTENT_TYPE_TO_MENTION[content_type]
+    return PLATFORM_TYPES.get(platform.casefold(), MentionType.review)
+
+
+def _row_value(row: dict[str, Any], mapping: dict[str, str], field: str) -> Any:
+    column = mapping.get(field)
+    return row.get(column) if column else None
+
+
+def _raw_item_from_import_row(row: dict[str, Any], index: int, request: SourceImportRequest, mapping: dict[str, str], source_connection_id: str | None = None) -> RawItem | None:
+    text = str(_row_value(row, mapping, "text") or "").strip()
+    if not text:
+        return None
+    source = _clean_platform(_row_value(row, mapping, "source") if request.use_source_from_file else request.platform)
+    content_type = str(_row_value(row, mapping, "content_type") or request.default_content_type or "").strip() or None
+    external_id = str(_row_value(row, mapping, "external_id") or "").strip()
+    if not external_id:
+        stable = hashlib.sha256(f"{request.ingestion_method}|{request.filename or request.display_name or source}|{index}|{text}".encode()).hexdigest()
+        external_id = f"{request.ingestion_method}-{stable}"
+    return RawItem(
+        source=source,
+        source_type=_source_type(source, content_type),
+        external_id=external_id,
+        external_url=str(_row_value(row, mapping, "source_url") or "").strip() or None,
+        author_name=str(_row_value(row, mapping, "author") or "").strip() or None,
+        text=text,
+        rating=_parse_rating(_row_value(row, mapping, "rating")),
+        published_at=_parse_published(_row_value(row, mapping, "published_at")),
+        metadata={
+            "origin": request.ingestion_method,
+            "ingestion_method": request.ingestion_method,
+            "source_connection_id": source_connection_id,
+            "source_filename": request.filename,
+            "content_type": content_type or ("review" if _source_type(source, content_type) == MentionType.review else "comment"),
+            "author_type": "customer",
+        },
+    )
+
+
+async def _record_import_source(request: SourceImportRequest) -> dict[str, Any] | None:
+    label = request.display_name or request.filename or {
+        "csv": "CSV Import",
+        "json": "JSON Import",
+        "manual": "Manual entries",
+    }[request.ingestion_method]
+    source = SourceCreate(
+        business_id=request.business_id,
+        source=label,
+        connection_type="imported",
+        collection_mode="auto",
+    )
+    if repository.configured:
+        try:
+            row = await repository.create_source(source)
+            await repository.update_source(row["id"], {
+                "status": "imported" if request.ingestion_method != "manual" else "active",
+                "active_collection_method": request.ingestion_method,
+                "last_checked_at": datetime.now(timezone.utc).isoformat(),
+            })
+            row.update({"status": "imported" if request.ingestion_method != "manual" else "active", "active_collection_method": request.ingestion_method})
+            return row
+        except SourceAlreadyConnected:
+            return None
+    payload = source.model_dump(mode="json") | {
+        "id": f"source-{len(sources)+1}",
+        "status": "imported" if request.ingestion_method != "manual" else "active",
+        "active_collection_method": request.ingestion_method,
+        "last_checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    sources.append(payload)
+    return payload
+
+
+@app.post("/api/sources/import", response_model=SourceImportResult)
+async def import_source_data(request: SourceImportRequest, context: AuthContext = Depends(require_user)) -> SourceImportResult:
+    await require_business_member(context, request.business_id)
+    if request.ingestion_method == "csv":
+        if not request.csv_content:
+            raise HTTPException(422, "CSV content is required")
+        rows = _csv_import_rows(request.csv_content)
+    elif request.ingestion_method == "json":
+        if not request.json_content:
+            raise HTTPException(422, "JSON content is required")
+        rows = _json_import_rows(request.json_content)
+    else:
+        rows = [request.manual_item or {}]
+    if len(rows) > 5000:
+        raise HTTPException(413, "Import is limited to 5000 rows")
+    mapping = _guess_mapping(rows, request.mapping)
+    if "text" not in mapping:
+        raise HTTPException(422, "Map one column to text before importing")
+    source_row = await _record_import_source(request)
+    results: list[ProcessedMention] = []
+    invalid = failed = duplicates = inserted = 0
+    for index, row in enumerate(rows):
+        item = _raw_item_from_import_row(row, index, request, mapping, str(source_row["id"]) if source_row else None)
+        if not item:
+            invalid += 1
+            continue
+        try:
+            result = await process_item(request.business_id, item)
+        except Exception:
+            failed += 1
+            continue
+        results.append(result)
+        if result.duplicate:
+            duplicates += 1
+        else:
+            inserted += 1
+    if repository.configured and source_row:
+        await repository.update_source(source_row["id"], {
+            "status": "import_failed" if failed and not inserted else ("active" if request.ingestion_method == "manual" else "imported"),
+            "last_checked_at": datetime.now(timezone.utc).isoformat(),
+            "error_message": f"{failed} row(s) failed" if failed else None,
+        })
+    return SourceImportResult(
+        source=source_row,
+        total_read=len(rows),
+        inserted=inserted,
+        duplicates=duplicates,
+        invalid=invalid,
+        failed=failed,
+        source_used=request.platform,
+        items=results,
+    )
+
+
 def _period_bounds(days: int) -> tuple[date, date]:
     end = date.today()
     return end - timedelta(days=max(1, min(days, 365)) - 1), end
@@ -594,6 +829,7 @@ async def poll_source(source_id: str, backfill: bool = False, context: AuthConte
             "error_code": collection.error_code, "message": collection.error_message, "detail": collection.error_message,
         })
     items = collection.items
+    items = [item.model_copy(update={"metadata": {**item.metadata, "source_connection_id": source_id}}) for item in items]
     if items:
         source["last_seen_item_id"] = items[0].external_id
     source["active_collection_method"] = collection.provider
@@ -670,12 +906,32 @@ async def delete_source(source_id: UUID, context: AuthContext = Depends(require_
     source = await repository.get_source(str(source_id)) if repository.configured else next((item for item in sources if item.get("id") == str(source_id)), None)
     if not source:
         raise HTTPException(404, "Source not found")
-    await require_business_member(context, UUID(source["business_id"]))
+    business_id = UUID(source["business_id"])
+    await require_business_member(context, business_id)
+    deleted_mentions = 0
     if repository.configured:
+        mention_rows = await repository.request("GET", "mentions", params={
+            "select": "id",
+            "business_id": f"eq.{business_id}",
+            "metadata->>source_connection_id": f"eq.{source_id}",
+            "limit": "10000",
+        })
+        deleted_mentions = len(mention_rows or [])
+        await repository.request("DELETE", "mentions", params={
+            "business_id": f"eq.{business_id}",
+            "metadata->>source_connection_id": f"eq.{source_id}",
+        })
         await repository.request("DELETE", "source_connections", params={"id": f"eq.{source_id}"})
     else:
         sources.remove(source)
-    return {"deleted": True, "id": str(source_id)}
+        before = len(processed)
+        processed[:] = [
+            item for item in processed
+            if item.mention.business_id != business_id
+            or item.mention.metadata.get("source_connection_id") != str(source_id)
+        ]
+        deleted_mentions = before - len(processed)
+    return {"deleted": True, "id": str(source_id), "deleted_mentions": deleted_mentions}
 
 
 @app.post("/api/discover")

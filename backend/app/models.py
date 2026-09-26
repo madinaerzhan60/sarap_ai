@@ -138,6 +138,42 @@ class SourceOAuthCredential(BaseModel):
     media_id: str | None = Field(default=None, max_length=500)
 
 
+class ImportFieldMapping(BaseModel):
+    text: str | None = None
+    author: str | None = None
+    rating: str | None = None
+    published_at: str | None = None
+    external_id: str | None = None
+    source_url: str | None = None
+    source: str | None = None
+    content_type: str | None = None
+
+
+class SourceImportRequest(BaseModel):
+    business_id: UUID
+    ingestion_method: str = Field(pattern="^(csv|json|manual)$")
+    platform: str = "Other"
+    use_source_from_file: bool = False
+    display_name: str | None = Field(default=None, max_length=200)
+    filename: str | None = Field(default=None, max_length=240)
+    csv_content: str | None = Field(default=None, max_length=2_000_000)
+    json_content: str | None = Field(default=None, max_length=2_000_000)
+    manual_item: dict[str, Any] | None = None
+    mapping: ImportFieldMapping = Field(default_factory=ImportFieldMapping)
+    default_content_type: str | None = None
+
+
+class SourceImportResult(BaseModel):
+    source: dict[str, Any] | None = None
+    total_read: int
+    inserted: int
+    duplicates: int
+    invalid: int
+    failed: int
+    source_used: str
+    items: list[ProcessedMention] = Field(default_factory=list)
+
+
 class DiscoveryRequest(BaseModel):
     business_id: UUID
     brand_name: str
