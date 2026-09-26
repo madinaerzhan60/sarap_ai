@@ -870,6 +870,32 @@ def _build_business_recommendations(rows: list[ProcessedMention], industry: str)
     }
 
 
+def _recommendation_response(business_id: UUID, start: date, end: date, payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "business_id": str(business_id),
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "score": payload["score"],
+        "summary": payload["summary"],
+        "overall_summary": payload.get("overall_summary", payload["summary"]),
+        "main_strengths": payload.get("main_strengths", []),
+        "main_weaknesses": payload.get("main_weaknesses", []),
+        "risk_signals": payload.get("risk_signals", []),
+        "recommendations": payload["recommendations"],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _cached_recommendation_response(cached: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **cached,
+        "overall_summary": cached.get("overall_summary", cached.get("summary", "")),
+        "main_strengths": cached.get("main_strengths", []),
+        "main_weaknesses": cached.get("main_weaknesses", []),
+        "risk_signals": cached.get("risk_signals", []),
+    }
+
+
 @app.get("/api/analytics")
 async def analytics(business_id: UUID, days: int = 30, context: AuthContext = Depends(require_user)) -> dict:
     await require_business_member(context, business_id)
@@ -906,24 +932,19 @@ async def recommendations(business_id: UUID, days: int = 30, refresh: bool = Fal
             "recommendations": {"urgent_fix": [], "improve": [], "keep_doing": []},
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
+    if repository.configured and not refresh:
+        try:
+            cached = await repository.get_recommendation(business_id, start.isoformat(), end.isoformat())
+            if cached:
+                return _cached_recommendation_response(cached)
+        except RepositoryUnavailable:
+            pass
     payload = _build_business_recommendations(rows, industry)
-    result = {
-        "business_id": str(business_id),
-        "period_start": start.isoformat(),
-        "period_end": end.isoformat(),
-        "score": payload["score"],
-        "summary": payload["summary"],
-        "overall_summary": payload.get("overall_summary", payload["summary"]),
-        "main_strengths": payload.get("main_strengths", []),
-        "main_weaknesses": payload.get("main_weaknesses", []),
-        "risk_signals": payload.get("risk_signals", []),
-        "recommendations": payload["recommendations"],
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
+    result = _recommendation_response(business_id, start, end, payload)
     if repository.configured:
         try:
-            saved = await repository.save_recommendation(business_id, start.isoformat(), end.isoformat(), payload)
-            return {**result, **saved, "overall_summary": result["overall_summary"], "main_strengths": result["main_strengths"], "main_weaknesses": result["main_weaknesses"], "risk_signals": result["risk_signals"]}
+            await repository.save_recommendation(business_id, start.isoformat(), end.isoformat(), payload)
+            return result
         except RepositoryUnavailable:
             return result
     return result
