@@ -38,23 +38,23 @@ class ZenRowsTwoGisConnector(BaseConnector):
             raise ProviderNotConfigured("ZENROWS_API_KEY is empty")
 
         timeout = _timeout_seconds(backfill=backfill)
-        params = {
+        payload = {
             "url": self.page_url,
             "apikey": api_key,
-            "js_render": "true",
-            "premium_proxy": "true",
+            "js_render": True,
+            "premium_proxy": True,
             "js_instructions": json.dumps(_zenrows_js_instructions(backfill=backfill)),
         }
         started_at = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-                response = await client.get("https://api.zenrows.com/v1/", params=params)
+                response = await client.post(_zenrows_fetch_endpoint(), json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
             elapsed = time.monotonic() - started_at
             raise ProviderError(f"zenrows: {_safe_exception_detail(exc, elapsed)}") from exc
 
-        html = response.text.strip()
+        html = _zenrows_response_text(response).strip()
         if not html:
             raise ProviderError("zenrows: empty response")
         content_type = response.headers.get("content-type", "")
@@ -105,7 +105,11 @@ class ZenRowsTwoGisConnector(BaseConnector):
 
 
 def _timeout_seconds(*, backfill: bool = False) -> float:
-    raw = os.getenv("ZENROWS_TIMEOUT_SECONDS") or os.getenv("CRAWLER_TIMEOUT_SECONDS", "20")
+    raw = (
+        os.getenv("ZENROWS_BACKFILL_TIMEOUT_SECONDS")
+        if backfill and os.getenv("ZENROWS_BACKFILL_TIMEOUT_SECONDS")
+        else os.getenv("ZENROWS_TIMEOUT_SECONDS") or os.getenv("CRAWLER_TIMEOUT_SECONDS", "20")
+    )
     try:
         timeout = max(10.0, float(raw))
     except ValueError:
@@ -114,6 +118,28 @@ def _timeout_seconds(*, backfill: bool = False) -> float:
         minimum_backfill_timeout = (_scroll_count(backfill=True) * _scroll_wait_ms() / 1000) + 30
         timeout = max(timeout, minimum_backfill_timeout)
     return timeout
+
+
+def _zenrows_fetch_endpoint() -> str:
+    return os.getenv("ZENROWS_FETCH_ENDPOINT", "https://api.zenrows.com/v1/fetch").strip() or "https://api.zenrows.com/v1/fetch"
+
+
+def _zenrows_response_text(response: httpx.Response) -> str:
+    content_type = response.headers.get("content-type", "")
+    if "json" not in content_type.casefold():
+        return response.text
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("html", "content", "body", "data", "text", "result"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                return value
+    return response.text
 
 
 def _scroll_wait_ms() -> int:

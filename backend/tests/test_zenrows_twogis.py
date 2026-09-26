@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import sys
-from urllib.parse import urlencode
 
 import httpx
 import pytest
@@ -100,7 +99,7 @@ class MockResponse:
         self.status_code = status_code
         self._text = text
         self.headers = headers or {"content-type": "text/html"}
-        self.request = httpx.Request("GET", "https://api.zenrows.com/v1/")
+        self.request = httpx.Request("POST", "https://api.zenrows.com/v1/fetch")
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -110,12 +109,17 @@ class MockResponse:
     def text(self):
         return self._text
 
+    def json(self):
+        return json.loads(self._text)
+
 
 class DummyZenRowsClient:
     response = MockResponse()
     error = None
     last_endpoint = None
     last_params = None
+    last_json = None
+    last_method = None
     last_timeout = None
 
     def __init__(self, *args, **kwargs):
@@ -132,6 +136,15 @@ class DummyZenRowsClient:
     async def get(self, endpoint, params=None):
         DummyZenRowsClient.last_endpoint = endpoint
         DummyZenRowsClient.last_params = params
+        DummyZenRowsClient.last_method = "GET"
+        if DummyZenRowsClient.error:
+            raise DummyZenRowsClient.error
+        return DummyZenRowsClient.response
+
+    async def post(self, endpoint, json=None):
+        DummyZenRowsClient.last_endpoint = endpoint
+        DummyZenRowsClient.last_json = json
+        DummyZenRowsClient.last_method = "POST"
         if DummyZenRowsClient.error:
             raise DummyZenRowsClient.error
         return DummyZenRowsClient.response
@@ -148,6 +161,8 @@ def reset_dummy_client(monkeypatch):
     DummyZenRowsClient.error = None
     DummyZenRowsClient.last_endpoint = None
     DummyZenRowsClient.last_params = None
+    DummyZenRowsClient.last_json = None
+    DummyZenRowsClient.last_method = None
     DummyZenRowsClient.last_timeout = None
     monkeypatch.setattr("app.connectors.zenrows_twogis.httpx.AsyncClient", DummyZenRowsClient)
 
@@ -176,12 +191,14 @@ def test_successful_zenrows_html_response_uses_expected_api_params(monkeypatch):
 
     asyncio.run(connector.fetch_latest())
 
-    assert DummyZenRowsClient.last_endpoint == "https://api.zenrows.com/v1/"
-    assert DummyZenRowsClient.last_params["url"] == connector.page_url
-    assert DummyZenRowsClient.last_params["apikey"] == "test-key"
-    assert DummyZenRowsClient.last_params["js_render"] == "true"
-    assert DummyZenRowsClient.last_params["premium_proxy"] == "true"
-    assert "js_instructions" in DummyZenRowsClient.last_params
+    assert DummyZenRowsClient.last_method == "POST"
+    assert DummyZenRowsClient.last_endpoint == "https://api.zenrows.com/v1/fetch"
+    assert DummyZenRowsClient.last_params is None
+    assert DummyZenRowsClient.last_json["url"] == connector.page_url
+    assert DummyZenRowsClient.last_json["apikey"] == "test-key"
+    assert DummyZenRowsClient.last_json["js_render"] is True
+    assert DummyZenRowsClient.last_json["premium_proxy"] is True
+    assert "js_instructions" in DummyZenRowsClient.last_json
 
 
 def test_zenrows_uses_provider_specific_timeout(monkeypatch):
@@ -202,11 +219,11 @@ def test_zenrows_request_contains_multiple_scrolls_in_one_api_call(monkeypatch):
 
     asyncio.run(connector.fetch_latest())
 
-    instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
+    instructions = json.loads(DummyZenRowsClient.last_json["js_instructions"])
     scroll_actions = [item for item in instructions if "evaluate" in item and "scrollIntoView" in item["evaluate"]]
-    assert DummyZenRowsClient.last_endpoint == "https://api.zenrows.com/v1/"
+    assert DummyZenRowsClient.last_endpoint == "https://api.zenrows.com/v1/fetch"
     assert len(scroll_actions) == 5
-    assert DummyZenRowsClient.last_params["url"] == connector.page_url
+    assert DummyZenRowsClient.last_json["url"] == connector.page_url
 
 
 def test_twogis_zenrows_scrolls_controls_scroll_count(monkeypatch):
@@ -216,7 +233,7 @@ def test_twogis_zenrows_scrolls_controls_scroll_count(monkeypatch):
 
     asyncio.run(connector.fetch_latest())
 
-    instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
+    instructions = json.loads(DummyZenRowsClient.last_json["js_instructions"])
     assert len([item for item in instructions if "evaluate" in item and "scrollIntoView" in item["evaluate"]]) == 2
     assert len(instructions) == 6
 
@@ -228,7 +245,7 @@ def test_backfill_scrolls_controls_scroll_count(monkeypatch):
 
     asyncio.run(connector.fetch_latest(backfill=True))
 
-    instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
+    instructions = json.loads(DummyZenRowsClient.last_json["js_instructions"])
     evaluate_actions = [item for item in instructions if "evaluate" in item]
     assert len(instructions) == 2
     assert len(evaluate_actions) == 1
@@ -246,14 +263,32 @@ def test_backfill_scrolls_40_generate_compact_query(monkeypatch):
 
     asyncio.run(connector.fetch_latest(backfill=True))
 
-    instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
-    encoded_query = urlencode(DummyZenRowsClient.last_params)
+    instructions = json.loads(DummyZenRowsClient.last_json["js_instructions"])
     evaluate_actions = [item for item in instructions if "evaluate" in item]
     assert len(instructions) == 2
     assert len(evaluate_actions) == 1
     assert "const scrollCount = 40" in evaluate_actions[0]["evaluate"]
-    assert DummyZenRowsClient.last_params["js_instructions"].count("scrollIntoView") == 1
-    assert len(encoded_query) < 12000
+    assert DummyZenRowsClient.last_json["js_instructions"].count("scrollIntoView") == 1
+    assert DummyZenRowsClient.last_endpoint == "https://api.zenrows.com/v1/fetch"
+    assert "js_instructions" not in DummyZenRowsClient.last_endpoint
+
+
+def test_backfill_scrolls_150_do_not_enlarge_request_url(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setenv("TWOGIS_ZENROWS_BACKFILL_SCROLLS", "150")
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    asyncio.run(connector.fetch_latest(backfill=True))
+
+    instructions = json.loads(DummyZenRowsClient.last_json["js_instructions"])
+    evaluate_actions = [item for item in instructions if "evaluate" in item]
+    assert DummyZenRowsClient.last_method == "POST"
+    assert DummyZenRowsClient.last_params is None
+    assert DummyZenRowsClient.last_endpoint == "https://api.zenrows.com/v1/fetch"
+    assert len(DummyZenRowsClient.last_endpoint) == len("https://api.zenrows.com/v1/fetch")
+    assert len(instructions) == 2
+    assert len(evaluate_actions) == 1
+    assert "const scrollCount = 150" in evaluate_actions[0]["evaluate"]
 
 
 def test_backfill_completion_metadata_is_read_from_accumulator(monkeypatch):
@@ -389,10 +424,10 @@ def test_backfill_still_uses_one_zenrows_http_request(monkeypatch):
     calls = 0
 
     class CountingClient(DummyZenRowsClient):
-        async def get(self, endpoint, params=None):
+        async def post(self, endpoint, json=None):
             nonlocal calls
             calls += 1
-            return await super().get(endpoint, params)
+            return await super().post(endpoint, json=json)
 
     monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
     monkeypatch.setattr("app.connectors.zenrows_twogis.httpx.AsyncClient", CountingClient)
@@ -401,6 +436,17 @@ def test_backfill_still_uses_one_zenrows_http_request(monkeypatch):
     asyncio.run(connector.fetch_latest(backfill=True))
 
     assert calls == 1
+
+
+def test_zenrows_uses_backfill_specific_timeout(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setenv("ZENROWS_TIMEOUT_SECONDS", "20")
+    monkeypatch.setenv("ZENROWS_BACKFILL_TIMEOUT_SECONDS", "180")
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    asyncio.run(connector.fetch_latest(backfill=True))
+
+    assert DummyZenRowsClient.last_timeout == 180
 
 
 @pytest.mark.parametrize(
