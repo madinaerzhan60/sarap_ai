@@ -490,7 +490,7 @@ async def disconnect_source_credentials(source_id: UUID, context: AuthContext = 
 
 
 @app.post("/api/sources/{source_id}/poll")
-async def poll_source(source_id: str, context: AuthContext = Depends(require_user)) -> JSONResponse:
+async def poll_source(source_id: str, backfill: bool = False, context: AuthContext = Depends(require_user)) -> JSONResponse:
     source = await repository.get_source(source_id) if repository.configured else next((s for s in sources if s["id"] == source_id), None)
     if not source:
         raise HTTPException(404, "Source not found")
@@ -509,12 +509,12 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
                     source_connection_id=source_id,
                     provider=credential_row["provider"],
                 )
-        last_seen_item_id = source.get("last_seen_item_id")
+        last_seen_item_id = None if backfill else source.get("last_seen_item_id")
         if repository.configured and last_seen_item_id:
             complete = await repository.external_item_is_complete(UUID(source["business_id"]), str(source["source"]), last_seen_item_id)
             if not complete:
                 last_seen_item_id = None
-        collection = await collector_registry.collect(source, credential_payload, last_seen_item_id)
+        collection = await collector_registry.collect(source, credential_payload, last_seen_item_id, backfill=backfill)
     except (ConnectorUnavailable, CredentialEncryptionError) as exc:
         if repository.configured:
             await repository.update_source(source_id, {"status": "error", "error_message": str(exc), "last_checked_at": datetime.now(timezone.utc).isoformat()})
@@ -535,18 +535,23 @@ async def poll_source(source_id: str, context: AuthContext = Depends(require_use
             "error_code": collection.error_code, "message": collection.error_message, "detail": collection.error_message,
         })
     items = collection.items
-    if items:
+    if items and not backfill:
         source["last_seen_item_id"] = items[0].external_id
     source["active_collection_method"] = collection.provider
     if repository.configured:
         success_status = "discovery_monitoring" if collection.provider == "discovery" else ("active" if items else "no_new_items")
-        await repository.update_source(source_id, {"last_seen_item_id": source.get("last_seen_item_id"), "active_collection_method": source["active_collection_method"], "last_checked_at": datetime.now(timezone.utc).isoformat(), "status": success_status, "error_message": None})
+        update_values = {"active_collection_method": source["active_collection_method"], "last_checked_at": datetime.now(timezone.utc).isoformat(), "status": success_status, "error_message": None}
+        if not backfill:
+            update_values["last_seen_item_id"] = source.get("last_seen_item_id")
+        await repository.update_source(source_id, update_values)
     results = [await process_item(UUID(source["business_id"]), item) for item in items]
     duplicates = sum(1 for result in results if result.duplicate)
     payload = {
         "status": "success", "source": collection.source, "provider": collection.provider,
+        "mode": "backfill" if backfill else "incremental",
         "collected": collection.collected_count, "new": len(results) - duplicates,
         "duplicates": duplicates, "warnings": collection.warnings,
+        "collection_metadata": collection.metadata,
         "items": [result.model_dump(mode="json") for result in results],
         "message": "No new reviews" if not results else f"{len(results) - duplicates} new item(s)",
     }

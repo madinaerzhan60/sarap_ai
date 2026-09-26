@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import inspect
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -68,6 +69,7 @@ class CollectionResult:
     warnings: list[str] = field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def collected_count(self) -> int:
@@ -261,14 +263,19 @@ class CollectorRegistry:
             return source_type, RssConnector(page_url, "rss")
         return source_type, MonitoredPageConnector(page_url, "website")
 
-    async def collect(self, source: dict[str, Any], credentials: dict[str, Any] | None = None, last_seen_item_id: str | None = None) -> CollectionResult:
+    async def collect(self, source: dict[str, Any], credentials: dict[str, Any] | None = None, last_seen_item_id: str | None = None, *, backfill: bool = False) -> CollectionResult:
         try:
             source_type, connector = self.resolve(source, credentials)
-            items = await connector.fetch_latest(last_seen_item_id)
+            if "backfill" in inspect.signature(connector.fetch_latest).parameters:
+                items = await connector.fetch_latest(last_seen_item_id, backfill=backfill)
+            else:
+                items = await connector.fetch_latest(last_seen_item_id)
             provider = str(getattr(connector, "collection_method", connector.connection_type.value))
             confirmed_empty = bool(getattr(connector, "confirmed_empty", False))
-            logger.info("source=%s provider=%s status=success collected=%d", source_type.value, provider, len(items))
-            return CollectionResult(True, source_type.value, provider, items)
+            metadata = dict(getattr(connector, "last_collection_metadata", {}) or {})
+            metadata["mode"] = "backfill" if backfill else "incremental"
+            logger.info("source=%s provider=%s status=success mode=%s collected=%d", source_type.value, provider, metadata["mode"], len(items))
+            return CollectionResult(True, source_type.value, provider, items, metadata=metadata)
         except Exception as exc:
             source_name = str(source.get("source", "unknown"))
             try:

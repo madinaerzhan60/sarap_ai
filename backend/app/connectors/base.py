@@ -12,7 +12,7 @@ class BaseConnector(ABC):
     connection_type: ConnectionType
 
     @abstractmethod
-    async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+    async def fetch_latest(self, last_seen_item_id: str | None = None, *, backfill: bool = False) -> list[RawItem]:
         """Return newest-first items and stop after the known external ID."""
 
     async def health(self) -> dict[str, str]:

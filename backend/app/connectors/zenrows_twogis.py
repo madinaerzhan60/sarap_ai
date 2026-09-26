@@ -32,7 +32,7 @@ class ZenRowsTwoGisConnector(BaseConnector):
         self.page_url = normalize_twogis_business_url(page_url)
         self.business_id = business_id
 
-    async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
+    async def fetch_latest(self, last_seen_item_id: str | None = None, *, backfill: bool = False) -> list[RawItem]:
         api_key = os.getenv("ZENROWS_API_KEY", "").strip()
         if not api_key:
             raise ProviderNotConfigured("ZENROWS_API_KEY is empty")
@@ -43,7 +43,7 @@ class ZenRowsTwoGisConnector(BaseConnector):
             "apikey": api_key,
             "js_render": "true",
             "premium_proxy": "true",
-            "js_instructions": json.dumps(_zenrows_js_instructions()),
+            "js_instructions": json.dumps(_zenrows_js_instructions(backfill=backfill)),
         }
         started_at = time.monotonic()
         try:
@@ -67,7 +67,7 @@ class ZenRowsTwoGisConnector(BaseConnector):
             status_code=response.status_code,
             content_type=content_type,
             final_url=final_url,
-            scroll_count=_scroll_count(),
+            scroll_count=_scroll_count(backfill=backfill),
             blocked=blocked,
         )
         logger.info(
@@ -85,9 +85,14 @@ class ZenRowsTwoGisConnector(BaseConnector):
             raise ProviderError("zenrows: blocked or captcha response")
 
         items = _extract_twogis_items(html, self.page_url)
+        self.last_collection_metadata = {
+            "scroll_count": _scroll_count(backfill=backfill),
+            "accumulated_review_card_count": diagnostics["review_selector_count"],
+            "parsed_count": len(items),
+        }
         if not items:
             raise ProviderError("zenrows: no usable 2GIS reviews found in response")
-        if last_seen_item_id:
+        if last_seen_item_id and not backfill:
             items = items[
                 : next(
                     (i for i, item in enumerate(items) if item.external_id == last_seen_item_id),
@@ -105,12 +110,15 @@ def _timeout_seconds() -> float:
         return 60.0
 
 
-def _scroll_count() -> int:
-    raw = os.getenv("TWOGIS_ZENROWS_SCROLLS", "5").strip()
+def _scroll_count(*, backfill: bool = False) -> int:
+    variable = "TWOGIS_ZENROWS_BACKFILL_SCROLLS" if backfill else "TWOGIS_ZENROWS_SCROLLS"
+    default = "40" if backfill else "5"
+    cap = 150 if backfill else 25
+    raw = os.getenv(variable, default).strip()
     try:
-        return max(0, min(int(raw), 25))
+        return max(0, min(int(raw), cap))
     except ValueError:
-        return 5
+        return int(default)
 
 
 def _extract_twogis_items(html: str, page_url: str) -> list[RawItem]:
@@ -135,7 +143,8 @@ def _extract_twogis_items(html: str, page_url: str) -> list[RawItem]:
         )
         for item in scraped
     ]
-    return items or extract_reviews_from_html(html, page_url, "2gis")
+    deduped = list({item.external_id: item for item in items}.values())
+    return deduped or extract_reviews_from_html(html, page_url, "2gis")
 
 
 def _safe_exception_detail(exc: BaseException, elapsed_seconds: float | None = None) -> str:
@@ -148,11 +157,37 @@ def _safe_exception_detail(exc: BaseException, elapsed_seconds: float | None = N
     return f"{class_name}{elapsed}: {representation}"
 
 
-def _zenrows_js_instructions() -> list[dict[str, str | int]]:
+def _zenrows_js_instructions(*, backfill: bool = False) -> list[dict[str, str | int]]:
     wait_ms = int(os.getenv("PLAYWRIGHT_SCROLL_WAIT_MS", "900"))
     instructions: list[dict[str, str | int]] = [{"wait": 3000}]
-    scroll_script = """
-const cards = document.querySelectorAll('div._1rowqpjv');
+    collect_script = """
+window.__sarap2gisReviewKeys = window.__sarap2gisReviewKeys || {};
+let container = document.querySelector('[data-sarap-accumulated-reviews="true"]');
+if (!container) {
+  container = document.createElement('div');
+  container.setAttribute('data-sarap-accumulated-reviews', 'true');
+  container.style.display = 'none';
+  document.body.appendChild(container);
+}
+const liveCards = Array.from(document.querySelectorAll('div._1rowqpjv'))
+  .filter((card) => !card.closest('[data-sarap-accumulated-reviews="true"]'));
+for (const card of liveCards) {
+  const author = (card.querySelector('span[title]')?.getAttribute('title') || card.querySelector('span[title]')?.textContent || '').trim();
+  const text = (card.querySelector('div._83kmcy a')?.textContent || '').replace(/\\s+/g, ' ').trim();
+  const date = (card.querySelector('span._10c0hgu')?.textContent || '').trim();
+  const rating = String(card.querySelectorAll('svg[color="#ffb81c"]').length || '');
+  const key = card.getAttribute('data-review-id') || [author, text, date, rating].join('|');
+  if (key && !window.__sarap2gisReviewKeys[key]) {
+    window.__sarap2gisReviewKeys[key] = true;
+    const clone = card.cloneNode(true);
+    clone.setAttribute('data-sarap-review-key', key);
+    container.appendChild(clone);
+  }
+}
+""".strip()
+    scroll_script = collect_script + """
+const cards = Array.from(document.querySelectorAll('div._1rowqpjv'))
+  .filter((card) => !card.closest('[data-sarap-accumulated-reviews="true"]'));
 if (cards.length) {
   cards[cards.length - 1].scrollIntoView({block: 'end'});
 } else {
@@ -165,9 +200,10 @@ if (cards.length) {
   window.scrollBy(0, 1400);
 }
 """.strip()
-    for _ in range(_scroll_count()):
+    for _ in range(_scroll_count(backfill=backfill)):
         instructions.append({"evaluate": scroll_script})
         instructions.append({"wait": wait_ms})
+    instructions.append({"evaluate": collect_script})
     return instructions
 
 

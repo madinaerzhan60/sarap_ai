@@ -49,6 +49,48 @@ TWOGIS_CARD_HTML = """
 </body>
 </html>
 """
+TWOGIS_TWO_CARD_HTML = """
+<html lang="ru">
+<head><title>Отзывы о SDU - 2ГИС</title></head>
+<body>
+  <div class="_1rowqpjv" data-review-id="new-review">
+    <span title="New Author">New Author</span>
+    <div class="_83kmcy"><a>Fresh review loaded first.</a></div>
+    <span class="_10c0hgu">2026-09-02T00:00:00+00:00</span>
+    <svg color="#ffb81c"></svg><svg color="#ffb81c"></svg><svg color="#ffb81c"></svg>
+  </div>
+  <div class="_1rowqpjv" data-review-id="known-review">
+    <span title="Known Author">Known Author</span>
+    <div class="_83kmcy"><a>Known review that was already synced.</a></div>
+    <span class="_10c0hgu">2026-09-01T00:00:00+00:00</span>
+    <svg color="#ffb81c"></svg><svg color="#ffb81c"></svg>
+  </div>
+</body>
+</html>
+"""
+TWOGIS_DUPLICATE_CARD_HTML = """
+<html lang="ru">
+<head><title>Отзывы о SDU - 2ГИС</title></head>
+<body>
+  <div data-sarap-accumulated-reviews="true">
+    <div class="_1rowqpjv" data-review-id="dup-review">
+      <span title="Aruzhan">Aruzhan</span>
+      <div class="_83kmcy"><a>Same review only once.</a></div>
+      <span class="_10c0hgu">2026-09-01T00:00:00+00:00</span>
+      <svg color="#ffb81c"></svg>
+    </div>
+  </div>
+  <div data-sarap-accumulated-reviews="true">
+    <div class="_1rowqpjv" data-review-id="dup-review">
+      <span title="Aruzhan">Aruzhan</span>
+      <div class="_83kmcy"><a>Same review only once.</a></div>
+      <span class="_10c0hgu">2026-09-01T00:00:00+00:00</span>
+      <svg color="#ffb81c"></svg>
+    </div>
+  </div>
+</body>
+</html>
+"""
 
 
 class MockResponse:
@@ -159,7 +201,7 @@ def test_zenrows_request_contains_multiple_scrolls_in_one_api_call(monkeypatch):
     asyncio.run(connector.fetch_latest())
 
     instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
-    scroll_actions = [item for item in instructions if "evaluate" in item]
+    scroll_actions = [item for item in instructions if "evaluate" in item and "scrollIntoView" in item["evaluate"]]
     assert DummyZenRowsClient.last_endpoint == "https://api.zenrows.com/v1/"
     assert len(scroll_actions) == 5
     assert DummyZenRowsClient.last_params["url"] == connector.page_url
@@ -173,8 +215,19 @@ def test_twogis_zenrows_scrolls_controls_scroll_count(monkeypatch):
     asyncio.run(connector.fetch_latest())
 
     instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
-    assert len([item for item in instructions if "evaluate" in item]) == 2
-    assert len(instructions) == 5
+    assert len([item for item in instructions if "evaluate" in item and "scrollIntoView" in item["evaluate"]]) == 2
+    assert len(instructions) == 6
+
+
+def test_backfill_scrolls_controls_scroll_count(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setenv("TWOGIS_ZENROWS_BACKFILL_SCROLLS", "7")
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    asyncio.run(connector.fetch_latest(backfill=True))
+
+    instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
+    assert len([item for item in instructions if "evaluate" in item and "scrollIntoView" in item["evaluate"]]) == 7
 
 
 def test_existing_2gis_parser_converts_zenrows_html_to_raw_items(monkeypatch):
@@ -205,6 +258,54 @@ def test_rendered_2gis_review_cards_use_existing_dom_parser(monkeypatch):
     assert items[0].text == "Excellent university gym and campus life."
     assert items[0].author_name == "Aruzhan"
     assert items[0].rating == 5
+
+
+def test_normal_incremental_respects_last_seen_item_id(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(text=TWOGIS_TWO_CARD_HTML)
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    items = asyncio.run(connector.fetch_latest("known-review"))
+
+    assert [item.external_id for item in items] == ["new-review"]
+
+
+def test_backfill_ignores_last_seen_item_id(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(text=TWOGIS_TWO_CARD_HTML)
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    items = asyncio.run(connector.fetch_latest("known-review", backfill=True))
+
+    assert [item.external_id for item in items] == ["new-review", "known-review"]
+
+
+def test_duplicate_accumulated_cards_are_deduped(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(text=TWOGIS_DUPLICATE_CARD_HTML)
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    items = asyncio.run(connector.fetch_latest(backfill=True))
+
+    assert [item.external_id for item in items] == ["dup-review"]
+
+
+def test_backfill_still_uses_one_zenrows_http_request(monkeypatch):
+    calls = 0
+
+    class CountingClient(DummyZenRowsClient):
+        async def get(self, endpoint, params=None):
+            nonlocal calls
+            calls += 1
+            return await super().get(endpoint, params)
+
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setattr("app.connectors.zenrows_twogis.httpx.AsyncClient", CountingClient)
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    asyncio.run(connector.fetch_latest(backfill=True))
+
+    assert calls == 1
 
 
 @pytest.mark.parametrize(
