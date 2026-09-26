@@ -18,6 +18,12 @@ class SourceAlreadyConnected(RuntimeError):
     pass
 
 
+def _uuid_json(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
 class SupabaseRepository:
     def __init__(self) -> None:
         self.url = os.getenv("SUPABASE_URL", "").rstrip("/")
@@ -137,8 +143,8 @@ class SupabaseRepository:
                 "rating": m.rating, "published_at": m.published_at.isoformat() if m.published_at else None,
                 "collected_at": m.collected_at.isoformat(), "language": result.analysis.language,
                 "content_hash": m.content_hash, "dedupe_key": m.dedupe_key,
-                "is_duplicate": m.is_duplicate, "duplicate_group_id": m.duplicate_group_id,
-                "canonical_mention_id": m.canonical_mention_id, "metadata": m.metadata,
+                "is_duplicate": m.is_duplicate, "duplicate_group_id": _uuid_json(m.duplicate_group_id),
+                "canonical_mention_id": _uuid_json(m.canonical_mention_id), "metadata": m.metadata,
                 "content_type": m.content_type.value, "author_type": m.author_type.value,
                 "include_in_analysis": m.include_in_analysis, "reply_draft": m.reply_draft,
                 "reply_generated_at": m.reply_generated_at.isoformat() if m.reply_generated_at else None,

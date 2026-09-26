@@ -346,9 +346,9 @@ async def analytics(business_id: UUID, days: int = 30, context: AuthContext = De
     counts = Counter(item.analysis.sentiment for item in rows)
     aliases: list[str] = []
     if repository.configured:
-        business = await repository.request("GET", "businesses", params={"select": "name,aliases", "id": f"eq.{business_id}", "limit": "1"})
+        business = await repository.request("GET", "businesses", params={"select": "name", "id": f"eq.{business_id}", "limit": "1"})
         if business:
-            aliases = [business[0].get("name") or "", *(business[0].get("aliases") or [])]
+            aliases = [business[0].get("name") or ""]
     topics = top_topics((item.mention.text for item in rows), aliases)
     return {"period_start": start.isoformat(), "period_end": end.isoformat(), "total": len(rows), "positive": counts["positive"], "negative": counts["negative"], "neutral": counts["neutral"] + counts["mixed"], "sentiment": {key: counts[key] for key in ("positive", "negative", "neutral", "mixed")}, "top_keywords": [{"word": word, "count": count} for word, count in topics]}
 

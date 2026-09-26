@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock
 from app.models import RawItem, MentionType, ProcessedMention, AIAnalysis, RiskResult
 from app.services.normalization import normalize, dedupe_key, normalize_text
 from app.services.dedupe import is_near_duplicate, find_near_duplicate_group, MIN_LENGTH_FOR_NEAR_DEDUPE
-from app.main import process_item, _visible_product_mentions, _should_run_history_sync
+from app.main import analytics, process_item, _visible_product_mentions, _should_run_history_sync
 from app.connectors.search import DiscoveryService, FreeSearchProvider, SearchResult
+from app.repository import SupabaseRepository
+from app.security import AuthContext
 
 
 def test_normalize_text_and_dedupe_key():
@@ -148,6 +150,65 @@ def test_analytics_excludes_duplicate_occurrences():
     visible = _visible_product_mentions([proc1, proc2])
     assert len(visible) == 1
     assert visible[0].mention.id == m1.id
+
+
+def test_persist_processed_serializes_uuid_duplicate_ids():
+    async def run():
+        biz_id = uuid4()
+        canonical_id = uuid4()
+        duplicate_group_id = uuid4()
+        mention = normalize(
+            RawItem(source="2gis", source_type=MentionType.review, external_id="uuid-1", author_name="A", text="Copied long review text " * 8, rating=5.0),
+            biz_id,
+        ).model_copy(update={"is_duplicate": True, "canonical_mention_id": canonical_id, "duplicate_group_id": duplicate_group_id})
+        analysis = AIAnalysis(language="ru", sentiment="positive", summary="", sentiment_score=0.8, severity="low", confidence=0.9, escalated=False, aspects=[])
+        result = ProcessedMention(mention=mention, analysis=analysis, risk=RiskResult(score=5, level="low", reasons=[]), alert_created=False)
+        repo = SupabaseRepository()
+        repo.url = "https://example.supabase.co"
+        repo.key = "test"
+        mention_payloads = []
+
+        async def fake_request(method, path, *, params=None, json=None, prefer=None):
+            if json is not None:
+                __import__("json").dumps(json)
+            if method == "GET" and path == "mentions":
+                return []
+            if method == "POST" and path == "mentions":
+                mention_payloads.append(json)
+                return [{"id": str(mention.id)}]
+            return None
+
+        repo.request = fake_request
+
+        await repo.persist_processed(result)
+
+        assert mention_payloads[0]["canonical_mention_id"] == str(canonical_id)
+        assert mention_payloads[0]["duplicate_group_id"] == str(duplicate_group_id)
+
+    asyncio.run(run())
+
+
+def test_analytics_does_not_request_business_aliases(monkeypatch):
+    async def run():
+        from app import main
+
+        biz_id = uuid4()
+        monkeypatch.setattr(main.repository, "url", "https://example.supabase.co")
+        monkeypatch.setattr(main.repository, "key", "test")
+        monkeypatch.setattr(main.repository, "list_processed", AsyncMock(return_value=[]))
+
+        async def fake_request(method, path, *, params=None, json=None, prefer=None):
+            assert path == "businesses"
+            assert params["select"] == "name"
+            return [{"name": "SARAP"}]
+
+        monkeypatch.setattr(main.repository, "request", fake_request)
+
+        response = await analytics(biz_id, context=AuthContext(user_id="demo", access_token="", demo=True))
+
+        assert response["total"] == 0
+
+    asyncio.run(run())
 
 
 def test_twogis_history_sync_does_not_stop_at_200_stored(monkeypatch):
