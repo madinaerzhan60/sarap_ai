@@ -168,6 +168,7 @@ def normalize_api_item(row: dict[str, Any], platform: str, target_url: str, coll
         parsed_rating = None
     external_id = str(_first(row, "id", "comment_id", "commentId", "review_id", "reviewId", "postId", "videoId", default="")) or None
     published = _datetime(_first(row, "created_at", "createdAt", "published_at", "publishedAt", "publishedTime", "dateCreated", "date", "timestamp", "snippet.topLevelComment.snippet.publishedAt"))
+    item_url = str(_first(row, "firmUrl", "reviewUrl", "url", "link", "source_url", default=target_url) or target_url)
     metadata = {
         "likes_count": _first(row, "likes_count", "likesCount", "likes", "likeCount", "comment_like_count", "engagement.likes", default=0),
         "business_reply": _first(row, "replyText", "business_reply"),
@@ -181,7 +182,7 @@ def normalize_api_item(row: dict[str, Any], platform: str, target_url: str, coll
         rating=parsed_rating,
         published_at=published,
         external_id=external_id,
-        url=target_url,
+        url=item_url,
         metadata=metadata,
         collected_by=collected_by,
     )

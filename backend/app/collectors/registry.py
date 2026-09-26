@@ -230,7 +230,7 @@ class CollectorRegistry:
             return SourceType.GOOGLE_MAPS, MapFallbackConnector("google_maps", page_url, business_id)
         if source_type == SourceType.INSTAGRAM:
             env_var = f"{source_type.value.upper().replace('_', '')}_PROVIDER"
-            instagram_actor = get_apify_actor_id("instagram", "APIFY_INSTAGRAM_ACTOR_ID")
+            instagram_actor = get_apify_actor_id("instagram", "APIFY_INSTAGRAM_ACTOR_ID", "APIFY_INSTAGRAM_COMMENTS_ACTOR_ID", "APIFY_INSTAGRAM_SCRAPER_ACTOR_ID")
             has_apify = bool(get_apify_token() and instagram_actor)
             provider_key = os.getenv(env_var, "apify" if has_apify else "direct").strip().lower()
             from app.connectors import InstagramApifyConnector
@@ -241,6 +241,8 @@ class CollectorRegistry:
             from app.connectors.discovery import PublicDiscoveryConnector
             if provider_key == "apify" and instagram_actor:
                 return source_type, InstagramApifyConnector(page_url, business_id)
+            if provider_key == "apify" and not instagram_actor:
+                raise ConnectorUnavailable("setup_required: Instagram Apify actor is not configured")
             if provider_key == "direct":
                 # If official credentials are supplied, use the official Graph connector
                 if credentials and credentials.get("access_token"):

@@ -700,6 +700,97 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; } th { color: v
   width: 23%;
 }
 
+.mentions-table th,
+.mentions-table td {
+  box-sizing: border-box;
+}
+
+.mentions-table th:nth-child(1),
+.mentions-table td:nth-child(1) {
+  width: 28% !important;
+}
+
+.mentions-table th:nth-child(2),
+.mentions-table td:nth-child(2) {
+  width: 9% !important;
+}
+
+.mentions-table th:nth-child(3),
+.mentions-table td:nth-child(3) {
+  width: 8% !important;
+}
+
+.mentions-table th:nth-child(4),
+.mentions-table td:nth-child(4) {
+  width: 11% !important;
+}
+
+.mentions-table th:nth-child(5),
+.mentions-table td:nth-child(5) {
+  width: 7% !important;
+  white-space: nowrap;
+}
+
+.mentions-table th:nth-child(6),
+.mentions-table td:nth-child(6) {
+  width: 9% !important;
+}
+
+.mentions-table th:nth-child(7),
+.mentions-table td:nth-child(7) {
+  width: 12% !important;
+  white-space: nowrap;
+}
+
+.mentions-table th:nth-child(8),
+.mentions-table td:nth-child(8) {
+  width: 16% !important;
+  min-width: 220px !important;
+}
+
+.risk-bar {
+  display: grid;
+  grid-template-columns: minmax(42px, 1fr) 26px;
+  align-items: center;
+  gap: 8px;
+  min-width: 74px;
+  color: var(--teal-dark);
+}
+
+.risk-bar span {
+  display: block;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(27,30,39,.08);
+}
+
+.risk-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+}
+
+.risk-bar strong {
+  font: 600 11px "IBM Plex Mono", monospace;
+  text-align: right;
+  color: var(--ink);
+}
+
+.risk-bar.moderate {
+  color: #b7872b;
+}
+
+.risk-bar.elevated {
+  color: var(--amber);
+}
+
+.risk-bar.high,
+.risk-bar.critical {
+  color: #a34936;
+}
+
 .mentions-table th {
   white-space: nowrap;
   overflow: visible;

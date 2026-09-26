@@ -17,9 +17,14 @@ Support Kazakh, Russian, English and mixed Kazakh/Russian. Preserve aspect-level
 sentiment. Sentiment must reflect the customer's meaning, including negation,
 sarcasm and complaints phrased as questions. The summary must paraphrase the
 meaning; never copy the review, truncate it, or prefix it with labels such as
-"Positive review" or "Problem". Words such as scam, deception,
-cannot log in, no support and do not buy are negative. If a numeric rating is
-provided, use 1-2 as negative, 3 as neutral and 4-5 as positive. Never invent facts."""
+"Positive review" or "Problem". The summary must tell a manager what the person
+is talking about, not merely that they are satisfied or dissatisfied. Keep it
+grounded only in the review text, preserve useful concrete details, and use the
+same language as the review where practical. For very short reactions, say that
+the reaction is brief and has no specific details. Words such as scam,
+deception, cannot log in, no support and do not buy are negative. If a numeric
+rating is provided, use 1-2 as negative, 3 as neutral and 4-5 as positive. Never
+invent facts."""
 
 
 def _json_text(value: str) -> str:

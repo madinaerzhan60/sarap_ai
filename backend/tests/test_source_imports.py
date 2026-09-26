@@ -75,6 +75,35 @@ def test_json_reviews_container_import():
     asyncio.run(run())
 
 
+def test_twogis_apify_json_fields_are_auto_detected():
+    async def run():
+        request = SourceImportRequest(
+            business_id=uuid4(),
+            ingestion_method="json",
+            platform="2GIS",
+            json_content=json.dumps([{
+                "id": "apify-2gis-1",
+                "text": "Красивый кампус, но далеко",
+                "authorName": "Александра",
+                "dateCreated": "2026-07-10T18:03:17+07:00",
+                "rating": 3,
+                "firmUrl": "https://2gis.kz/almaty/firm/70000001042393451",
+                "firmRating": 4.7,
+                "scrapedAt": "2026-09-01T00:00:00Z",
+            }]),
+        )
+        result = await import_source_data(request, _context())
+        item = result.items[0].mention
+
+        assert item.external_id == "apify-2gis-1"
+        assert item.author_name == "Александра"
+        assert item.published_at is not None and item.published_at.date().isoformat() == "2026-07-10"
+        assert item.rating == 3
+        assert item.external_url == "https://2gis.kz/almaty/firm/70000001042393451"
+
+    asyncio.run(run())
+
+
 def test_duplicate_import_skipped_and_short_identical_ids_preserved():
     async def run():
         biz_id = uuid4()

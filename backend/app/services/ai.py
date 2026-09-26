@@ -19,40 +19,107 @@ ASPECTS = {
 }
 
 
+def _is_russian_like(text: str) -> bool:
+    return bool(re.search(r"[а-яё]", text, re.I))
+
+
+def _short_reaction_summary(compact: str, sentiment: str) -> str | None:
+    letters = re.findall(r"[\wа-яёәғқңөұүһі]+", compact, re.I)
+    has_heart = bool(re.search(r"[❤♥💕💖😍🥰👍🔥✨]", compact))
+    if len("".join(letters)) > 18 or len(letters) > 3:
+        return None
+    russian = _is_russian_like(compact)
+    if has_heart and not letters:
+        return "Краткая положительная реакция без текстовых деталей." if russian or sentiment != "negative" else "Brief positive reaction without text details."
+    if sentiment == "positive":
+        return "Краткая положительная оценка без дополнительных деталей." if russian else "Brief positive assessment without additional details."
+    if sentiment == "negative":
+        return "Краткая резко негативная оценка без конкретной причины." if russian else "Brief strongly negative assessment without a specific reason."
+    if sentiment == "mixed":
+        return "Краткая смешанная оценка без дополнительных деталей." if russian else "Brief mixed assessment without additional details."
+    return "Краткая реакция без конкретных деталей." if russian else "Brief reaction without specific details."
+
+
+def _topic_summary_ru(lowered: str) -> str | None:
+    positive: list[str] = []
+    negative: list[str] = []
+    if re.search(r"кампус|трц|красив|мест.{0,25}(?:поспать|отдох)|отдых", lowered):
+        positive.append("красивый кампус и места для отдыха")
+    if re.search(r"каскелен|далеко|располож", lowered):
+        negative.append("расположения в Каскелене")
+    if re.search(r"деньг|оплат", lowered) and re.search(r"пофиг|безразлич|главное|приоритет", lowered):
+        return "Жалуется на безразличное отношение и считает, что приоритет отдается деньгам."
+    if re.search(r"кредит", lowered) and re.search(r"зарегистр|дисциплин", lowered):
+        return "Жалуется на проблемы с академическими кредитами и невозможность зарегистрироваться на дисциплины после оплаты."
+    if re.search(r"поддержк.{0,35}(?:не\s+отвеч|никак|игнор)", lowered):
+        return "Жалуется на отсутствие ответа службы поддержки."
+    if re.search(r"не\s+(?:могу|получается).{0,45}(?:войти|зайти)|не\s+работ.{0,30}прилож", lowered):
+        return "Сообщает о проблеме со входом или работой приложения."
+    if re.search(r"розыгрыш|выигра.{0,20}абонемент", lowered):
+        return "Сомневается в честности розыгрыша годового абонемента."
+    if re.search(r"позвон|звон.{0,35}продаж|продажниц", lowered):
+        return "Жалуется на нежелательный звонок отдела продаж."
+    if re.search(r"обман|мошен|подстав", lowered):
+        return "Подозревает обман или несправедливое отношение."
+    if re.search(r"долго|очеред|ожида", lowered):
+        return "Жалуется на долгое ожидание."
+    if re.search(r"груб|персонал|сотрудник|менеджер", lowered):
+        return "Описывает опыт взаимодействия с сотрудниками."
+    if re.search(r"дорог|цен|стоимост", lowered):
+        return "Недоволен стоимостью услуги."
+    if re.search(r"приложен.{0,45}(?:спорт|занят)|(?:спорт|занят).{0,45}приложен", lowered):
+        return "Хвалит приложение для занятий спортом."
+    if positive and negative:
+        return f"Отмечает {', '.join(positive)}, но снижает оценку из-за {', '.join(negative)}."
+    if positive:
+        return f"Отмечает {', '.join(positive)}."
+    if negative:
+        return f"Жалуется на {', '.join(negative)}."
+    if re.search(r"удобн|выгодн", lowered):
+        return "Отмечает удобство и пользу сервиса."
+    if re.search(r"вкусн|кофе|еда|тағам|дәм", lowered):
+        return "Оценивает качество еды или напитков."
+    return None
+
+
+def _topic_summary_en(lowered: str) -> str | None:
+    if re.search(r"cannot|can't|unable", lowered) and re.search(r"log ?in|register|sign ?up", lowered):
+        return "Reports being unable to log in or register."
+    if re.search(r"support|service", lowered) and re.search(r"ignore|no reply|doesn't answer|not answer", lowered):
+        return "Complains that support or service does not respond."
+    if re.search(r"wait|late|queue|slow", lowered):
+        return "Complains about slow service or long waiting time."
+    if re.search(r"expensive|price|cost", lowered):
+        return "Complains about the price or cost."
+    if re.search(r"campus|beautiful|place to rest|sleep", lowered):
+        return "Mentions the campus or resting places as a positive detail."
+    if re.search(r"great|good|love|recommend|best", lowered):
+        return "Praises a specific positive experience but gives few details."
+    return None
+
+
 def summarize_review(text: str, sentiment: str) -> str:
     """Create a short meaning-based summary without repeating the review."""
     compact = " ".join(text.split())
     lowered = compact.casefold()
-    if not re.search(r"[а-яё]", compact, re.I):
-        if sentiment == "positive":
-            return "The customer is satisfied with the overall experience."
-        if sentiment == "negative":
-            return "The customer reports a problem with the experience."
-        return "The customer shares a general opinion without a clear rating."
-    rules = [
-        (r"розыгрыш|выигра.{0,20}абонемент", "Пользователь сомневается в честности розыгрыша годового абонемента."),
-        (r"позвон|звон.{0,35}продаж|продажниц", "Пользователь жалуется на нежелательный звонок отдела продаж."),
-        (r"не\s+(?:могу|получается).{0,45}(?:войти|зайти)|не\s+работ.{0,30}прилож", "Пользователь сообщает о проблеме со входом или работой приложения."),
-        (r"поддержк.{0,35}(?:не\s+отвеч|никак|игнор)", "Пользователь жалуется на отсутствие ответа службы поддержки."),
-        (r"убирают\s+время|время.{0,30}(?:зал|клуб)", "Пользователь недоволен ограничениями времени посещения залов."),
-        (r"обман|мошен|подстав", "Пользователь подозревает обман или несправедливое отношение."),
-        (r"дорог|цен|стоимост", "Пользователь недоволен стоимостью услуги."),
-        (r"долго|очеред|ожида", "Пользователь жалуется на долгое ожидание."),
-        (r"груб|персонал|сотрудник|менеджер", "Пользователь оценивает качество работы сотрудников."),
-        (r"приложен.{0,45}(?:спорт|занят)|(?:спорт|занят).{0,45}приложен", "Пользователь хвалит приложение для занятий спортом."),
-        (r"приложен|сервис|разнообраз", "Пользователь положительно оценивает приложение, сервис и выбор услуг."),
-        (r"удобн|выгодн", "Пользователь отмечает удобство и пользу сервиса."),
-    ]
-    for pattern, summary in rules:
-        if re.search(pattern, lowered, re.I):
-            return summary
+    short = _short_reaction_summary(compact, sentiment)
+    if short:
+        return short
+    if _is_russian_like(compact):
+        topical = _topic_summary_ru(lowered)
+        if topical:
+            return topical
+    else:
+        topical = _topic_summary_en(lowered)
+        if topical:
+            return topical
     if sentiment == "positive":
-        return "Пользователь положительно оценивает сервис."
+        return "Краткая положительная оценка без дополнительных деталей." if _is_russian_like(compact) else "Brief positive assessment without additional details."
     if sentiment == "negative":
-        return "Пользователь сообщает о негативном опыте с сервисом."
+        return "Краткая негативная оценка без конкретной причины." if _is_russian_like(compact) else "Brief negative assessment without a specific reason."
     if sentiment == "mixed":
-        return "Пользователь отмечает одновременно преимущества и недостатки сервиса."
-    return "Пользователь делится мнением без однозначной оценки."
+        return "Краткая смешанная оценка без дополнительных деталей." if _is_russian_like(compact) else "Brief mixed assessment without additional details."
+    return "Краткое мнение без однозначной оценки и конкретных деталей." if _is_russian_like(compact) else "Brief opinion without clear sentiment or specific details."
 
 
 def detect_language(text: str) -> str:

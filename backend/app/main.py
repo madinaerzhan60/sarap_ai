@@ -335,12 +335,12 @@ async def manual_import(request: ManualImportRequest, context: AuthContext = Dep
 
 
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
-    "text": ("text", "review", "comment", "content", "body", "review_text"),
-    "author": ("author", "username", "user", "reviewer", "name"),
+    "text": ("text", "review", "comment", "content", "body", "review_text", "reviewText"),
+    "author": ("authorName", "author_name", "author", "username", "user", "reviewer", "name"),
     "rating": ("rating", "stars", "score"),
-    "published_at": ("date", "created_at", "published_at", "timestamp"),
-    "external_id": ("id", "review_id", "comment_id", "external_id"),
-    "source_url": ("url", "link", "source_url"),
+    "published_at": ("dateCreated", "date_created", "date", "created_at", "createdAt", "published_at", "publishedAt", "timestamp"),
+    "external_id": ("id", "review_id", "reviewId", "comment_id", "commentId", "external_id"),
+    "source_url": ("firmUrl", "reviewUrl", "url", "link", "source_url"),
     "source": ("source", "platform"),
     "content_type": ("content_type", "type"),
 }

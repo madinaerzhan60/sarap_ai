@@ -107,7 +107,7 @@ class ApifyTwoGisConnector(BaseConnector):
             pub_date = _parse_iso_date(row.get("dateCreated") or row.get("date") or row.get("publishedAt"))
 
             ext_id = review_id if review_id else f"apify-{hash(text)}"
-            review_url = str(row.get("reviewUrl") or "").strip() or f"{self.page_url}#review-{ext_id}"
+            review_url = str(row.get("firmUrl") or row.get("reviewUrl") or row.get("url") or "").strip() or f"{self.page_url}#review-{ext_id}"
 
             metadata: dict[str, Any] = {
                 "content_type": "review",

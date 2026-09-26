@@ -38,6 +38,7 @@ class _ApifyConnector(BaseConnector):
     platform = ""
     source = ""
     actor_env = ""
+    actor_aliases: tuple[str, ...] = ()
     input_env = ""
     source_type = MentionType.social_post
     content_type = "post"
@@ -52,7 +53,7 @@ class _ApifyConnector(BaseConnector):
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         apify = fallback.ApifyProvider(
             self.platform,
-            actor_id=fallback.get_apify_actor_id(self.platform, self.actor_env),
+            actor_id=fallback.get_apify_actor_id(self.platform, self.actor_env, *self.actor_aliases),
             input_json=os.getenv(self.input_env),
             require_paid_opt_in=False,
         )
@@ -79,6 +80,7 @@ class InstagramApifyConnector(_ApifyConnector):
     source = "instagram"
     platform = "instagram"
     actor_env = "APIFY_INSTAGRAM_ACTOR_ID"
+    actor_aliases = ("APIFY_INSTAGRAM_COMMENTS_ACTOR_ID", "APIFY_INSTAGRAM_SCRAPER_ACTOR_ID")
     input_env = "APIFY_INSTAGRAM_INPUT_JSON"
     source_type = MentionType.social_comment
     content_type = "comment"

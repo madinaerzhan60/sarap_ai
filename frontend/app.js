@@ -219,16 +219,33 @@ function fallbackMentionSummary(item){
   if(!text)return 'No text available for analysis.';
   const lower=text.toLowerCase();
   const hasCyrillic=/[А-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]/.test(text);
+  const words=(text.match(/[\wА-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]+/g)||[]);
+  const hasHeart=/[❤♥💕💖😍🥰👍🔥✨]/.test(text);
+  if(words.join('').length<=18&&words.length<=3){
+    if(hasHeart&&!words.length)return 'Краткая положительная реакция без текстовых деталей.';
+    if(item.sentiment==='positive')return hasCyrillic?'Краткая положительная оценка без дополнительных деталей.':'Brief positive assessment without additional details.';
+    if(item.sentiment==='negative')return hasCyrillic?'Краткая резко негативная оценка без конкретной причины.':'Brief strongly negative assessment without a specific reason.';
+  }
   if(hasCyrillic){
+    if(/кампус|трц|красив|мест.{0,25}(поспать|отдох)|отдых/i.test(lower)&&/каскелен|далеко|располож/i.test(lower))return 'Отмечает красивый кампус и места для отдыха, но снижает оценку из-за расположения в Каскелене.';
+    if(/деньг|оплат/i.test(lower)&&/пофиг|безразлич|главное|приоритет/i.test(lower))return 'Жалуется на безразличное отношение и считает, что приоритет отдается деньгам.';
+    if(/кредит/i.test(lower)&&/зарегистр|дисциплин/i.test(lower))return 'Жалуется на проблемы с академическими кредитами и невозможность зарегистрироваться на дисциплины после оплаты.';
     if(/розыгрыш|выигра.{0,20}абонемент/i.test(lower))return 'Пользователь сомневается в честности розыгрыша годового абонемента.';
     if(/позвон|звон.{0,35}продаж|продажниц/i.test(lower))return 'Пользователь жалуется на нежелательный звонок отдела продаж.';
     if(/не\s+(могу|получается).{0,45}(войти|зайти)|не\s+работ.{0,30}прилож/i.test(lower))return 'Пользователь сообщает о проблеме со входом или работой приложения.';
+    if(/поддержк.{0,35}(не\s+отвеч|никак|игнор)/i.test(lower))return 'Жалуется на отсутствие ответа службы поддержки.';
     if(/обман|мошен|подстав/i.test(lower))return 'Пользователь подозревает обман или несправедливое отношение.';
+    if(/долго|очеред|ожида/i.test(lower))return 'Жалуется на долгое ожидание.';
+    if(/дорог|цен|стоимост/i.test(lower))return 'Недоволен стоимостью услуги.';
     if(/приложен.{0,45}(спорт|занят)|(спорт|занят).{0,45}приложен/i.test(lower))return 'Пользователь хвалит приложение для занятий спортом.';
-    if(/приложен|сервис|разнообраз/i.test(lower)&&item.sentiment==='positive')return 'Пользователь положительно оценивает приложение, сервис и выбор услуг.';
-    return item.sentiment==='positive'?'Пользователь положительно оценивает сервис.':item.sentiment==='negative'?'Пользователь сообщает о негативном опыте с сервисом.':item.sentiment==='mixed'?'Пользователь отмечает преимущества и недостатки сервиса.':'Пользователь делится мнением без однозначной оценки.';
+    if(/удобн|выгодн/i.test(lower))return 'Отмечает удобство и пользу сервиса.';
+    if(/вкусн|кофе|еда|тағам|дәм/i.test(lower))return 'Оценивает качество еды или напитков.';
+    return item.sentiment==='positive'?'Краткая положительная оценка без дополнительных деталей.':item.sentiment==='negative'?'Краткая негативная оценка без конкретной причины.':item.sentiment==='mixed'?'Краткая смешанная оценка без дополнительных деталей.':'Краткое мнение без однозначной оценки и конкретных деталей.';
   }
-  return item.sentiment==='positive'?'The customer is satisfied with the overall experience.':item.sentiment==='negative'?'The customer reports a problem with the experience.':'The customer shares a general opinion without a clear rating.';
+  if(/cannot|can't|unable/.test(lower)&&/log ?in|register|sign ?up/.test(lower))return 'Reports being unable to log in or register.';
+  if(/wait|late|queue|slow/.test(lower))return 'Complains about slow service or long waiting time.';
+  if(/expensive|price|cost/.test(lower))return 'Complains about the price or cost.';
+  return item.sentiment==='positive'?'Brief positive assessment without additional details.':item.sentiment==='negative'?'Brief negative assessment without a specific reason.':'Brief opinion without clear sentiment or specific details.';
 }
 function meaningfulMentionSummary(item){
   const summary=String(item.summary||'').trim();
@@ -237,6 +254,13 @@ function meaningfulMentionSummary(item){
   const original=text.toLowerCase();
   const copied=!normalized||normalized===original||original.startsWith(normalized.replace(/…$/,''))||/^(положительный отзыв|проблема|смешанный отзыв|нейтральное упоминание|positive feedback|reported issue):/.test(normalized);
   return copied?fallbackMentionSummary(item):summary;
+}
+function riskBar(score){
+  const value=Math.max(0,Math.min(100,Number(score)||0));
+  const label=value>=80?'Critical':value>=60?'High':value>=40?'Elevated':value>=20?'Moderate':'Low';
+  return `<div class="risk-bar ${label.toLowerCase()}" aria-label="Risk ${value} of 100, ${label}" title="Risk ${value}/100 · ${label}">
+    <span><i style="width:${value}%"></i></span><strong>${value}</strong>
+  </div>`;
 }
 function mentionTableRow(item){
   const sentiment=String(item.sentiment||'neutral').toLowerCase();
@@ -259,7 +283,7 @@ function mentionTableRow(item){
     <td><span class="tag">${escapeHtml(item.contentType||item.type||item.source_type||'other')}</span></td>
     <td><span class="sentiment-pill ${sentiment}"><i></i>${escapeHtml(sentiment)}</span></td>
     <td>${item.rating==null?'—':`${item.rating}/5`}</td>
-    <td><span class="risk-pill ${item.risk<30?'low':''}">${item.risk}</span></td>
+    <td>${riskBar(item.risk)}</td>
     <td class="mention-date">${escapeHtml(published)}</td>
     <td class="review-cell">
       <strong>${escapeHtml(meaningfulMentionSummary(item))}</strong>

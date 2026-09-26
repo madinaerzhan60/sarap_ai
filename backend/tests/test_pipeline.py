@@ -5,6 +5,7 @@ from app.services.ai import analyze, summarize_review
 from app.services.normalization import content_hash, normalize
 from app.services.risk import calculate
 from app.services.polling import next_poll
+from app.connectors import InstagramApifyConnector
 from app.connectors.reviews import ConnectorUnavailable, InstagramFallbackConnector, MapFallbackConnector, TwoGisPlaywrightConnector, connector_for, extract_reviews_from_html, extract_youtube_video_ids, youtube_video_id
 from app.collectors.registry import SourceType, collector_registry, normalize_source_type
 from app.services.review_extraction import _plain_text_fallback, deduplicate_reviews, review_external_id
@@ -156,13 +157,31 @@ def test_twogis_search_url_is_normalized_to_reviews_tab():
 def test_summary_paraphrases_review_instead_of_copying_it():
     text = "Отличное приложение. Отличный сервис. Разнообразие приятно удивляет."
     summary = summarize_review(text, "positive")
-    assert summary == "Пользователь положительно оценивает приложение, сервис и выбор услуг."
+    assert summary == "Краткая положительная оценка без дополнительных деталей."
     assert text not in summary
 
 
 def test_summary_captures_specific_complaint():
     text = "Как человек с одним посещением мог выиграть розыгрыш годового абонемента? Пахнет обманом!"
-    assert summarize_review(text, "negative") == "Пользователь сомневается в честности розыгрыша годового абонемента."
+    assert summarize_review(text, "negative") == "Сомневается в честности розыгрыша годового абонемента."
+
+
+def test_summary_captures_grounded_review_topics():
+    assert summarize_review(
+        "3 звезды потому что расположен в Каскелене, красивый трц и неплохие места чтобы поспать",
+        "neutral",
+    ) == "Отмечает красивый кампус и места для отдыха, но снижает оценку из-за расположения в Каскелене."
+    assert summarize_review(
+        "Пофиг всем главное деньги, а не студенты",
+        "negative",
+    ) == "Жалуется на безразличное отношение и считает, что приоритет отдается деньгам."
+    assert summarize_review(
+        "Крайне не рекомендую, невозможно зарегистрироваться на дисциплины после оплаты академических кредитов",
+        "negative",
+    ) == "Жалуется на проблемы с академическими кредитами и невозможность зарегистрироваться на дисциплины после оплаты."
+    assert summarize_review("Классно", "positive") == "Краткая положительная оценка без дополнительных деталей."
+    assert summarize_review("Govno", "negative") == "Brief strongly negative assessment without a specific reason."
+    assert summarize_review("❤️", "positive") == "Краткая положительная реакция без текстовых деталей."
 
 
 def test_twogis_search_url_without_firm_id_is_rejected():
@@ -180,6 +199,17 @@ def test_instagram_source_uses_fallback_connector(monkeypatch):
     monkeypatch.setenv("INSTAGRAM_PROVIDER", "fallback")
     connector = connector_for({"source": "Instagram", "collection_mode": "auto", "source_url": "https://www.instagram.com/p/example/"})
     assert isinstance(connector, InstagramFallbackConnector)
+
+
+def test_instagram_source_uses_apify_when_token_and_actor_alias_exist(monkeypatch):
+    monkeypatch.delenv("INSTAGRAM_PROVIDER", raising=False)
+    monkeypatch.delenv("APIFY_INSTAGRAM_ACTOR_ID", raising=False)
+    monkeypatch.setenv("APIFY_TOKEN", "token")
+    monkeypatch.setenv("APIFY_INSTAGRAM_COMMENTS_ACTOR_ID", "apify/instagram-comments")
+    source_type, connector = collector_registry.resolve({"source": "Instagram", "collection_mode": "auto", "source_url": "https://www.instagram.com/p/example/"})
+
+    assert source_type == SourceType.INSTAGRAM
+    assert isinstance(connector, InstagramApifyConnector)
 
 
 def test_instagram_profile_url_is_supported():
