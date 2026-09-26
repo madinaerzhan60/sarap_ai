@@ -37,7 +37,7 @@ class ZenRowsTwoGisConnector(BaseConnector):
         if not api_key:
             raise ProviderNotConfigured("ZENROWS_API_KEY is empty")
 
-        timeout = _timeout_seconds()
+        timeout = _timeout_seconds(backfill=backfill)
         params = {
             "url": self.page_url,
             "apikey": api_key,
@@ -102,12 +102,24 @@ class ZenRowsTwoGisConnector(BaseConnector):
         return items
 
 
-def _timeout_seconds() -> float:
+def _timeout_seconds(*, backfill: bool = False) -> float:
     raw = os.getenv("ZENROWS_TIMEOUT_SECONDS") or os.getenv("CRAWLER_TIMEOUT_SECONDS", "20")
     try:
-        return max(10.0, float(raw))
+        timeout = max(10.0, float(raw))
     except ValueError:
-        return 60.0
+        timeout = 60.0
+    if backfill:
+        minimum_backfill_timeout = (_scroll_count(backfill=True) * _scroll_wait_ms() / 1000) + 30
+        timeout = max(timeout, minimum_backfill_timeout)
+    return timeout
+
+
+def _scroll_wait_ms() -> int:
+    raw = os.getenv("PLAYWRIGHT_SCROLL_WAIT_MS", "900")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 900
 
 
 def _scroll_count(*, backfill: bool = False) -> int:
@@ -158,7 +170,7 @@ def _safe_exception_detail(exc: BaseException, elapsed_seconds: float | None = N
 
 
 def _zenrows_js_instructions(*, backfill: bool = False) -> list[dict[str, str | int]]:
-    wait_ms = int(os.getenv("PLAYWRIGHT_SCROLL_WAIT_MS", "900"))
+    wait_ms = _scroll_wait_ms()
     instructions: list[dict[str, str | int]] = [{"wait": 3000}]
     collect_script = """
 window.__sarap2gisReviewKeys = window.__sarap2gisReviewKeys || {};
@@ -171,7 +183,7 @@ if (!container) {
 }
 const liveCards = Array.from(document.querySelectorAll('div._1rowqpjv'))
   .filter((card) => !card.closest('[data-sarap-accumulated-reviews="true"]'));
-for (const card of liveCards) {
+    for (const card of liveCards) {
   const author = (card.querySelector('span[title]')?.getAttribute('title') || card.querySelector('span[title]')?.textContent || '').trim();
   const text = (card.querySelector('div._83kmcy a')?.textContent || '').replace(/\\s+/g, ' ').trim();
   const date = (card.querySelector('span._10c0hgu')?.textContent || '').trim();
@@ -185,6 +197,40 @@ for (const card of liveCards) {
   }
 }
 """.strip()
+    if backfill:
+        scroll_count = _scroll_count(backfill=True)
+        indented_collect_script = collect_script.replace("\n", "\n    ")
+        backfill_script = f"""
+(async () => {{
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const collectCurrentReviewCards = () => {{
+    {indented_collect_script}
+  }};
+  const scrollCount = {scroll_count};
+  const waitMs = {wait_ms};
+  for (let i = 0; i < scrollCount; i += 1) {{
+    collectCurrentReviewCards();
+    const cards = Array.from(document.querySelectorAll('div._1rowqpjv'))
+      .filter((card) => !card.closest('[data-sarap-accumulated-reviews="true"]'));
+    if (cards.length) {{
+      cards[cards.length - 1].scrollIntoView({{block: 'end'}});
+    }} else {{
+      const candidates = Array.from(document.querySelectorAll('main, [data-scroll="true"], div'))
+        .filter((el) => el.scrollHeight > el.clientHeight + 200)
+        .sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+      if (candidates[0]) {{
+        candidates[0].scrollTop += 1400;
+      }}
+      window.scrollBy(0, 1400);
+    }}
+    if (waitMs > 0) await sleep(waitMs);
+  }}
+  collectCurrentReviewCards();
+}})();
+""".strip()
+        instructions.append({"evaluate": backfill_script})
+        return instructions
+
     scroll_script = collect_script + """
 const cards = Array.from(document.querySelectorAll('div._1rowqpjv'))
   .filter((card) => !card.closest('[data-sarap-accumulated-reviews="true"]'));

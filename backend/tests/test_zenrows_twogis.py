@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from urllib.parse import urlencode
 
 import httpx
 import pytest
@@ -227,7 +228,29 @@ def test_backfill_scrolls_controls_scroll_count(monkeypatch):
     asyncio.run(connector.fetch_latest(backfill=True))
 
     instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
-    assert len([item for item in instructions if "evaluate" in item and "scrollIntoView" in item["evaluate"]]) == 7
+    evaluate_actions = [item for item in instructions if "evaluate" in item]
+    assert len(instructions) == 2
+    assert len(evaluate_actions) == 1
+    assert "const scrollCount = 7" in evaluate_actions[0]["evaluate"]
+    assert "collectCurrentReviewCards" in evaluate_actions[0]["evaluate"]
+    assert "data-sarap-accumulated-reviews" in evaluate_actions[0]["evaluate"]
+
+
+def test_backfill_scrolls_40_generate_compact_query(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    monkeypatch.setenv("TWOGIS_ZENROWS_BACKFILL_SCROLLS", "40")
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    asyncio.run(connector.fetch_latest(backfill=True))
+
+    instructions = json.loads(DummyZenRowsClient.last_params["js_instructions"])
+    encoded_query = urlencode(DummyZenRowsClient.last_params)
+    evaluate_actions = [item for item in instructions if "evaluate" in item]
+    assert len(instructions) == 2
+    assert len(evaluate_actions) == 1
+    assert "const scrollCount = 40" in evaluate_actions[0]["evaluate"]
+    assert DummyZenRowsClient.last_params["js_instructions"].count("scrollIntoView") == 1
+    assert len(encoded_query) < 12000
 
 
 def test_existing_2gis_parser_converts_zenrows_html_to_raw_items(monkeypatch):
