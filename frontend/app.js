@@ -239,14 +239,34 @@ function meaningfulMentionSummary(item){
 }
 function mentionTableRow(item){
   const sentiment=String(item.sentiment||'neutral').toLowerCase();
-  const published=item.publishedAt?new Date(item.publishedAt).toLocaleDateString():'Unknown';
+  const rawDate =
+    item.date_raw ||
+    item.metadata?.date_raw ||
+    item.metadata?.dateRaw;
+
+  const publishedValue=item.publishedAt||item.published_at;
+
+  const published = rawDate
+    ? String(rawDate)
+    : publishedValue
+      ? new Date(publishedValue).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})
+      : 'Unknown';
+
   return `<tr data-mention-row="${item.id}" data-action="open-mention" data-id="${item.id}" tabindex="0">
-    <td class="review-cell"><strong>${escapeHtml(meaningfulMentionSummary(item))}</strong><small>${escapeHtml(item.author||'Unknown author')}${item.includeInAnalysis?'':' · Ignored author'}</small></td>
-    <td>${escapeHtml(item.source||'Unknown')}</td><td><span class="tag">${escapeHtml(item.contentType||item.type||'other')}</span></td>
+    <td class="mention-review-text">${escapeHtml(item.text||'—')}</td>
+    <td>${escapeHtml(item.source||'Unknown')}</td>
+    <td><span class="tag">${escapeHtml(item.contentType||item.type||item.source_type||'other')}</span></td>
     <td><span class="sentiment-pill ${sentiment}"><i></i>${escapeHtml(sentiment)}</span></td>
-    <td>${item.rating==null?'—':`${item.rating}/5`}</td><td><span class="risk-pill ${item.risk<30?'low':''}">${item.risk}</span></td><td>${escapeHtml(published)}</td>
+    <td>${item.rating==null?'—':`${item.rating}/5`}</td>
+    <td><span class="risk-pill ${item.risk<30?'low':''}">${item.risk}</span></td>
+    <td class="mention-date">${escapeHtml(published)}</td>
+    <td class="review-cell">
+      <strong>${escapeHtml(meaningfulMentionSummary(item))}</strong>
+      <small>${escapeHtml(item.author||'Unknown author')}${item.includeInAnalysis?'':' · Ignored author'}</small>
+    </td>
   </tr>`;
 }
+
 const mentionFilters={search:'',source:'all',type:'all',sentiment:'all',analysis:'all',reply:'all',date:'all',sort:'newest'};
 function filteredMentions(){
   const cutoff=mentionFilters.date==='all'?null:Date.now()-Number(mentionFilters.date)*86400000;
@@ -376,13 +396,14 @@ function mentions(){
       <table class="mentions-table">
         <thead>
           <tr>
-            <th>Summary</th>
+            <th>Review</th>
             <th>${headerFilter('source','Source',[['all','Any source'],['2gis','2GIS'],['google','Google'],['yandex','Yandex'],['youtube','YouTube'],['telegram','Telegram'],['instagram','Instagram'],['manual','Manual']])}</th>
             <th>${headerFilter('type','Type',[['all','Any type'],['review','Review'],['comment','Comment'],['question','Question'],['post','Post'],['news','News'],['other','Other']])}</th>
             <th>${headerFilter('sentiment','Sentiment',[['all','Any sentiment'],['positive','Positive'],['neutral','Neutral'],['negative','Negative']])}</th>
             <th>${sortButton('Rating','rating')}</th>
             <th>${sortButton('Risk','risk')}</th>
             <th>${sortButton('Published date','newest')}</th>
+            <th>Summary</th>
           </tr>
         </thead>
         <tbody id="mention-list">${tableContent}</tbody>
