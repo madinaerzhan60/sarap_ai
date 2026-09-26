@@ -1,4 +1,4 @@
-import { apiAuthHeaders, completeWorkspace, consumeAuthCallback, db, isSupabaseConfigured, loadWorkspace, resendConfirmation, restoreSession, sendPasswordRecovery, signIn, signOut, signUp, updatePassword } from './supabase-client.js?v=4';
+import { apiAuthHeaders, completeWorkspace, consumeAuthCallback, db, isSupabaseConfigured, loadWorkspace, onAuthStateChange, resendConfirmation, restoreSession, sendPasswordRecovery, signIn, signOut, signUp, updatePassword } from './supabase-client.js?v=5';
 
 try {
   const embeddedConfig = document.querySelector('#sarap-config')?.textContent;
@@ -99,6 +99,7 @@ const emptyBusiness = {id:null,name:'',website:'',industry:'',country:'Kazakhsta
 let state = loadState();
 let currentSettingsTab = 'Business profile';
 let authReady = false;
+let authSubscription = null;
 let pendingExtractedReviews = [];
 
 function loadState() {
@@ -150,6 +151,10 @@ function forgotPassword() {
 
 function resetPassword() {
   return `<main class="center-shell single-card"><form class="form-card glass" data-form="reset-password"><div class="eyebrow">Secure recovery</div><h2>Choose a new password</h2><p>The password must contain at least eight characters.</p><div class="field"><label>New password</label><input name="password" type="password" minlength="8" required autocomplete="new-password"></div><div class="field"><label>Repeat password</label><input name="passwordConfirm" type="password" minlength="8" required autocomplete="new-password"></div><div class="form-actions"><span></span><button class="btn btn-primary">Save new password</button></div></form></main>`;
+}
+
+function authLoading() {
+  return '<main class="center-shell"><section class="form-card glass"><h2>Opening SARAP…</h2><p>Checking your secure session.</p><div class="skeleton"></div></section></main>';
 }
 
 function onboarding() {
@@ -418,6 +423,7 @@ function admin() {
 }
 
 function render() {
+  if(!authReady&&isSupabaseConfigured()){app.innerHTML=authLoading();return;}
   if(state.route==='landing') app.innerHTML=landing();
   else if(state.route==='login'||state.route==='register') app.innerHTML=auth(state.route);
   else if(state.route==='verify-email') app.innerHTML=verifyEmail();
@@ -567,23 +573,59 @@ async function loadAnalyticsData(refresh=false){
 }
 async function loadAdminData(){if(state.session?.role!=='admin')return;try{const response=await fetch(apiPath('/api/admin/overview'),{headers:await apiAuthHeaders()});if(!response.ok)throw new Error((await response.json()).detail||'Could not load admin data');state.admin=await response.json();saveState();render();}catch(error){toast('Admin data unavailable',error.message);}}
 
+function clearWorkspaceForUser(userId) {
+  if(state.accountUserId===userId)return;
+  state.business=structuredClone(emptyBusiness);state.mentions=[];state.discoveries=[];state.alerts=[];state.sources=[];state.admin=null;state.accountUserId=userId;
+}
+
+function applyAuthSession(authSession, callback=null) {
+  const user=authSession?.user||{};
+  clearWorkspaceForUser(user.id||null);
+  state.session={name:user.user_metadata?.full_name||'SARAP User',email:user.email||state.pendingEmail,demo:false,verified:Boolean(user.email_confirmed_at||callback)};
+  if(user.user_metadata?.business_name)state.business.name=user.user_metadata.business_name;
+  return user;
+}
+
+async function loadWorkspaceAfterAuth() {
+  const workspace=await loadWorkspace();
+  const complete=applyWorkspace(workspace);
+  state.route=state.session?.role==='admin'&&location.pathname==='/admin'?'admin':complete?'overview':'onboarding';
+  if(complete)setTimeout(()=>loadProductData().then(()=>{if(state.route==='overview')render();}).catch(error=>toast('Dashboard data unavailable',error.message)),0);
+  if(state.route==='admin')setTimeout(loadAdminData,0);
+  if(state.route==='overview')setTimeout(loadAnalyticsData,0);
+  return complete;
+}
+
+function setupAuthListener() {
+  if(authSubscription||!isSupabaseConfigured())return;
+  const { data }=onAuthStateChange((event, session)=>{
+    if(!authReady)return;
+    if(event==='SIGNED_OUT'){
+      state.session=null;state.pendingEmail='';state.route='landing';saveState();render();return;
+    }
+    if(session&&['INITIAL_SESSION','SIGNED_IN','TOKEN_REFRESHED'].includes(event)){
+      applyAuthSession(session);
+      saveState();
+    }
+  });
+  authSubscription=data?.subscription||data||true;
+}
+
 async function initializeAuth() {
   if(!isSupabaseConfigured()){if(!state.session?.demo)state.session=null;authReady=true;saveState();return;}
+  setupAuthListener();
   try {
     const callback=consumeAuthCallback();
     const authSession=await restoreSession();
     if(!authSession){state.session=null;authReady=true;saveState();return;}
-    const user=authSession.user||{};
-    if(state.accountUserId!==user.id){state.business=structuredClone(emptyBusiness);state.mentions=[];state.discoveries=[];state.alerts=[];state.sources=[];state.admin=null;state.accountUserId=user.id;}
-    state.session={name:user.user_metadata?.full_name||'SARAP User',email:user.email||state.pendingEmail,demo:false,verified:Boolean(user.email_confirmed_at||callback)};
-    if(user.user_metadata?.business_name)state.business.name=user.user_metadata.business_name;
+    applyAuthSession(authSession, callback);
     if(callback?.type==='recovery'){state.route='reset-password';authReady=true;saveState();return;}
-    const workspace=await loadWorkspace();
-    const complete=applyWorkspace(workspace);
-    state.route=state.session?.role==='admin'&&location.pathname==='/admin'?'admin':complete?'overview':'onboarding';
-    if(complete)setTimeout(()=>loadProductData().then(()=>{if(state.route==='overview')render();}).catch(error=>toast('Dashboard data unavailable',error.message)),0);
-    if(state.route==='admin')setTimeout(loadAdminData,0);
-    if(state.route==='overview')setTimeout(loadAnalyticsData,0);
+    try{
+      await loadWorkspaceAfterAuth();
+    }catch(error){
+      state.route=state.route==='admin'?'admin':'overview';
+      setTimeout(()=>toast('Workspace unavailable',friendlyError(error)),0);
+    }
   } catch(error) {
     state.session=null;state.route='login';setTimeout(()=>toast('Authentication error',error.message),0);
   }
@@ -599,13 +641,14 @@ async function authSubmit(form) {
     if(state.route==='register'){
       const result=await signUp({email:data.email,password:data.password,fullName:data.name,businessName:data.business});
       state.pendingEmail=data.email;state.business.name=data.business;state.onboardingStep=1;
-      if(result.session){state.accountUserId=result.session.user?.id||null;state.mentions=[];state.discoveries=[];state.alerts=[];state.sources=[];state.session={name:data.name,email:data.email,demo:false,verified:true};state.route='onboarding';}
+      if(result.session){applyAuthSession(result.session);state.session.name=data.name;state.session.verified=true;state.route='onboarding';}
       else state.route='verify-email';
     }else{
       const session=await signIn({email:data.email,password:data.password});
-      if(state.accountUserId!==session.user?.id){state.business=structuredClone(emptyBusiness);state.mentions=[];state.discoveries=[];state.alerts=[];state.sources=[];state.admin=null;state.accountUserId=session.user?.id||null;}
-      state.session={name:session.user?.user_metadata?.full_name||'SARAP User',email:session.user?.email||data.email,demo:false,verified:Boolean(session.user?.email_confirmed_at)};
-      const workspace=await loadWorkspace();const complete=applyWorkspace(workspace);state.route=state.session?.role==='admin'?'admin':complete?'overview':'onboarding';saveState();render();if(state.route==='admin')setTimeout(loadAdminData,0);if(state.route==='overview'){setTimeout(()=>loadProductData().then(render).catch(error=>toast('Dashboard data unavailable',error.message)),0);setTimeout(loadAnalyticsData,0);}
+      if(!session)throw new Error('Could not start a saved session. Please try again.');
+      applyAuthSession(session);
+      try{await loadWorkspaceAfterAuth();}catch(error){state.route='overview';setTimeout(()=>toast('Workspace unavailable',friendlyError(error)),0);}
+      saveState();render();
     }
     saveState();render();
   }catch(error){
@@ -773,9 +816,9 @@ document.addEventListener('click', async e => {
     try{
       const session=await restoreSession();
       if(!session)throw new Error('Open the link in the email first, then try again.');
-      const user=session.user||{};state.accountUserId=user.id||state.accountUserId;state.session={name:user.user_metadata?.full_name||'SARAP User',email:user.email||state.pendingEmail,demo:false,verified:Boolean(user.email_confirmed_at)};
+      applyAuthSession(session);
       if(!state.session.verified)throw new Error('Email is not confirmed yet.');
-      const workspace=await loadWorkspace();const complete=applyWorkspace(workspace);if(complete)await loadProductData();state.route=complete?'overview':'onboarding';saveState();render();
+      const complete=await loadWorkspaceAfterAuth();if(complete)await loadProductData();saveState();render();
     }catch(error){target.disabled=false;toast('Confirmation not found',error.message);}
   }
   if(action==='onboarding-back'){state.onboardingStep=Math.max(1,state.onboardingStep-1);saveState();render();}
@@ -856,7 +899,7 @@ document.addEventListener('submit', async e => {
   e.preventDefault(); const form=e.target; const kind=form.dataset.form;
   if(kind==='auth')await authSubmit(form);
   if(kind==='forgot'){const d=fieldData(form);form.classList.add('loading');try{await sendPasswordRecovery(d.email);state.pendingEmail=d.email;state.route='login';saveState();render();toast('Recovery email sent','Open the link in your inbox to choose a new password.');}catch(error){form.classList.remove('loading');toast('Could not send recovery email',error.message);}}
-  if(kind==='reset-password'){const d=fieldData(form);if(d.password!==d.passwordConfirm){toast('Passwords do not match','Enter the same password twice.');return;}form.classList.add('loading');try{await updatePassword(d.password);const workspace=await loadWorkspace();const complete=applyWorkspace(workspace);if(complete)await loadProductData();state.route=complete?'overview':'onboarding';saveState();render();toast('Password updated','Your new password is active.');}catch(error){form.classList.remove('loading');toast('Could not update password',error.message);}}
+  if(kind==='reset-password'){const d=fieldData(form);if(d.password!==d.passwordConfirm){toast('Passwords do not match','Enter the same password twice.');return;}form.classList.add('loading');try{await updatePassword(d.password);const session=await restoreSession();if(session)applyAuthSession(session);const complete=await loadWorkspaceAfterAuth();if(complete)await loadProductData();saveState();render();toast('Password updated','Your new password is active.');}catch(error){form.classList.remove('loading');toast('Could not update password',error.message);}}
   if(kind==='onboarding')await onboardingSubmit(form);
   if(kind==='review-extract'){
     if(state.session?.demo){toast('Sign in required','AI extraction is available inside a saved workspace.');return;}
@@ -960,6 +1003,6 @@ document.addEventListener('click',e=>{
 });
 
 app.innerHTML='<main class="center-shell"><section class="form-card glass"><h2>Opening SARAP…</h2><p>Checking your secure session.</p><div class="skeleton"></div></section></main>';
-void loadPublicConfig();
+await loadPublicConfig();
 await initializeAuth();
 render();

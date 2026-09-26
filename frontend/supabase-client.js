@@ -1,4 +1,8 @@
-const sessionKey = 'sarap-auth-session-v1';
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+const legacySessionKey = 'sarap-auth-session-v1';
+let client = null;
+let legacySessionMigrated = false;
 
 function config() {
   return window.SARAP_CONFIG || {};
@@ -9,8 +13,8 @@ export function isSupabaseConfigured() {
   return Boolean(value.SUPABASE_URL && value.SUPABASE_ANON_KEY);
 }
 
-function authUrl(path) {
-  return `${config().SUPABASE_URL.replace(/\/$/, '')}/auth/v1${path}`;
+function requireConfig() {
+  if (!isSupabaseConfigured()) throw new Error('Supabase is not configured yet');
 }
 
 function restUrl(path) {
@@ -23,31 +27,59 @@ function redirectUrl() {
   return config().API_URL || 'http://127.0.0.1:8000/';
 }
 
-function readSession() {
-  try { return JSON.parse(localStorage.getItem(sessionKey) || 'null'); }
+function getSupabaseClient() {
+  requireConfig();
+  if (!client) {
+    client = createClient(config().SUPABASE_URL, config().SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    });
+  }
+  return client;
+}
+
+function readLegacySession() {
+  try { return JSON.parse(localStorage.getItem(legacySessionKey) || 'null'); }
   catch { return null; }
 }
 
-function writeSession(value) {
-  if (!value) localStorage.removeItem(sessionKey);
-  else localStorage.setItem(sessionKey, JSON.stringify(value));
+async function migrateLegacySession() {
+  if (legacySessionMigrated) return;
+  legacySessionMigrated = true;
+  const legacy = readLegacySession();
+  if (!legacy?.access_token || !legacy?.refresh_token) return;
+  const { error } = await getSupabaseClient().auth.setSession({
+    access_token: legacy.access_token,
+    refresh_token: legacy.refresh_token,
+  });
+  if (!error) localStorage.removeItem(legacySessionKey);
 }
 
-function normalizeSession(payload) {
-  if (!payload?.access_token) return null;
-  const session = {
-    access_token: payload.access_token,
-    refresh_token: payload.refresh_token,
-    expires_at: payload.expires_at || Math.floor(Date.now() / 1000) + Number(payload.expires_in || 3600),
-    token_type: payload.token_type || 'bearer',
-    user: payload.user || null,
-  };
-  writeSession(session);
-  return session;
+function parseAuthCallback() {
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const query = new URLSearchParams(location.search);
+  const error = hash.get('error_description') || query.get('error_description');
+  const type = hash.get('type') || query.get('type');
+  const hasAuthParams = Boolean(
+    hash.get('access_token') ||
+    hash.get('refresh_token') ||
+    hash.get('error') ||
+    query.get('code') ||
+    query.get('error')
+  );
+  return { error, type, hasAuthParams };
+}
+
+function cleanAuthCallbackUrl() {
+  if (location.protocol === 'file:') return;
+  history.replaceState({}, document.title, location.pathname);
 }
 
 async function request(url, options = {}) {
-  if (!isSupabaseConfigured()) throw new Error('Supabase is not configured yet');
+  requireConfig();
   const headers = { apikey: config().SUPABASE_ANON_KEY, 'Content-Type': 'application/json', ...(options.headers || {}) };
   const controller = new AbortController();
   let timeout;
@@ -72,95 +104,84 @@ async function request(url, options = {}) {
   }
 }
 
-async function refreshSession(session) {
-  if (!session?.refresh_token) return null;
-  try {
-    const payload = await request(authUrl('/token?grant_type=refresh_token'), { method: 'POST', body: JSON.stringify({ refresh_token: session.refresh_token }) });
-    return normalizeSession(payload);
-  } catch {
-    writeSession(null);
-    return null;
-  }
+function ensureSession(payload) {
+  const session = payload?.session || payload;
+  if (!session?.access_token) return null;
+  return session;
+}
+
+function authErrorMessage(error) {
+  return error?.message || 'Authentication failed. Please try again.';
 }
 
 export async function restoreSession() {
-  let session = readSession();
-  if (!session) return null;
-  if (Number(session.expires_at || 0) < Math.floor(Date.now() / 1000) + 60) session = await refreshSession(session);
-  if (!session) return null;
-  // Supabase already returns the verified user during sign-in. Reuse it until
-  // the token is close to expiry instead of making a /user request before
-  // every dashboard API call.
-  if (session.user?.id) return session;
-  try {
-    const user = await request(authUrl('/user'), { headers: { Authorization: `Bearer ${session.access_token}` } });
-    session.user = user;
-    writeSession(session);
-    return session;
-  } catch (error) {
-    if (/timed out|failed to fetch|network|load failed/i.test(String(error?.message || error))) {
-      writeSession(null);
-      return null;
-    }
-    return refreshSession(session);
-  }
+  await migrateLegacySession();
+  const { data, error } = await getSupabaseClient().auth.getSession();
+  if (error) throw new Error(authErrorMessage(error));
+  return data?.session || null;
 }
 
 export function consumeAuthCallback() {
-  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
-  const query = new URLSearchParams(location.search);
-  const error = hash.get('error_description') || query.get('error_description');
-  if (error) {
-    history.replaceState({}, document.title, location.pathname);
-    throw new Error(error);
+  const callback = parseAuthCallback();
+  if (callback.error) {
+    cleanAuthCallbackUrl();
+    throw new Error(callback.error);
   }
-  const accessToken = hash.get('access_token') || query.get('access_token');
-  if (!accessToken) return null;
-  const session = normalizeSession({
-    access_token: accessToken,
-    refresh_token: hash.get('refresh_token') || query.get('refresh_token'),
-    expires_in: hash.get('expires_in') || query.get('expires_in'),
-    token_type: hash.get('token_type') || query.get('token_type'),
-  });
-  const type = hash.get('type') || query.get('type');
-  history.replaceState({}, document.title, location.pathname);
-  return { session, type };
+  return callback.hasAuthParams || callback.type ? { type: callback.type || null } : null;
+}
+
+export function onAuthStateChange(handler) {
+  return getSupabaseClient().auth.onAuthStateChange((event, session) => handler(event, session));
 }
 
 export async function signUp({ email, password, fullName, businessName }) {
-  const url = `${authUrl('/signup')}?redirect_to=${encodeURIComponent(redirectUrl())}`;
-  const payload = await request(url, { method: 'POST', body: JSON.stringify({ email, password, data: { full_name: fullName, business_name: businessName } }) });
-  return { user: payload?.user || null, session: normalizeSession(payload) };
+  const { data, error } = await getSupabaseClient().auth.signUp({
+    email,
+    password,
+    options: {
+      data: { full_name: fullName, business_name: businessName },
+      emailRedirectTo: redirectUrl(),
+    },
+  });
+  if (error) throw new Error(authErrorMessage(error));
+  return { user: data?.user || null, session: data?.session || null };
 }
 
 export async function signIn({ email, password }) {
-  const payload = await request(authUrl('/token?grant_type=password'), { method: 'POST', body: JSON.stringify({ email, password }) });
-  return normalizeSession(payload);
+  const { data, error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
+  if (error) throw new Error(authErrorMessage(error));
+  return ensureSession(data);
 }
 
 export async function resendConfirmation(email) {
-  const url = `${authUrl('/resend')}?redirect_to=${encodeURIComponent(redirectUrl())}`;
-  return request(url, { method: 'POST', body: JSON.stringify({ type: 'signup', email }) });
+  const { error } = await getSupabaseClient().auth.resend({
+    type: 'signup',
+    email,
+    options: { emailRedirectTo: redirectUrl() },
+  });
+  if (error) throw new Error(authErrorMessage(error));
+  return true;
 }
 
 export async function sendPasswordRecovery(email) {
-  const url = `${authUrl('/recover')}?redirect_to=${encodeURIComponent(redirectUrl())}`;
-  return request(url, { method: 'POST', body: JSON.stringify({ email }) });
+  const { error } = await getSupabaseClient().auth.resetPasswordForEmail(email, { redirectTo: redirectUrl() });
+  if (error) throw new Error(authErrorMessage(error));
+  return true;
 }
 
 export async function updatePassword(password) {
   const session = await restoreSession();
   if (!session) throw new Error('The recovery link has expired. Request a new one.');
-  return request(authUrl('/user'), { method: 'PUT', headers: { Authorization: `Bearer ${session.access_token}` }, body: JSON.stringify({ password }) });
+  const { data, error } = await getSupabaseClient().auth.updateUser({ password });
+  if (error) throw new Error(authErrorMessage(error));
+  return data;
 }
 
 export async function signOut() {
-  const session = readSession();
-  if (session?.access_token) {
-    try { await request(authUrl('/logout'), { method: 'POST', headers: { Authorization: `Bearer ${session.access_token}` } }); }
-    catch { /* The local session must still be cleared. */ }
-  }
-  writeSession(null);
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.auth.signOut();
+  if (error) await supabase.auth.signOut({ scope: 'local' });
+  localStorage.removeItem(legacySessionKey);
 }
 
 export async function apiAuthHeaders() {
