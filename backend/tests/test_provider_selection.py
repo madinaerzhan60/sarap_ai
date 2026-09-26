@@ -6,6 +6,7 @@ from datetime import datetime
 from app.collectors.registry import collector_registry, SourceType
 from app.models import RawItem
 from app.connectors import InstagramApifyConnector, FacebookApifyConnector
+from app.connectors.apify_twogis import ApifyTwoGisConnector
 
 # Helper dummy provider and pipeline
 class DummyProvider:
@@ -61,3 +62,34 @@ def test_facebook_apify_provider_selection_and_missing_token(monkeypatch):
         asyncio.run(connector.fetch_latest())
     from app.scrapers.fallback import ProviderNotConfigured
     assert isinstance(excinfo.value, ProviderNotConfigured)
+
+
+def test_facebook_apify_accepts_api_token_alias(monkeypatch):
+    monkeypatch.setenv('FACEBOOK_PROVIDER', 'apify')
+    monkeypatch.delenv('APIFY_TOKEN', raising=False)
+    monkeypatch.setenv('APIFY_API_TOKEN', 'api-token')
+    source = {"source": "facebook", "source_url": "https://facebook.com/page"}
+    _, connector = collector_registry.resolve(source)
+    assert isinstance(connector, FacebookApifyConnector)
+
+
+def test_twogis_apify_accepts_legacy_actor_env(monkeypatch):
+    monkeypatch.setenv("APIFY_API_TOKEN", "dummy_token")
+    monkeypatch.delenv("APIFY_TWOGIS_ACTOR_ID", raising=False)
+    monkeypatch.setenv("APIFY_2GIS_ACTOR_ID", "legacy/actor")
+    connector = ApifyTwoGisConnector("https://2gis.kz/almaty/firm/70000001042393451/tab/reviews", "test-biz")
+
+    class MockResponse:
+        status_code = 201
+        def json(self):
+            return []
+
+    async def run():
+        async def fake_post(endpoint, *, params, json):
+            assert "/acts/legacy~actor/" in endpoint
+            return MockResponse()
+        from unittest.mock import AsyncMock, patch
+        with patch("httpx.AsyncClient.post", AsyncMock(side_effect=fake_post)):
+            assert await connector.fetch_latest() == []
+
+    asyncio.run(run())

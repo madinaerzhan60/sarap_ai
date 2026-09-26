@@ -13,6 +13,10 @@ import app.scrapers.fallback as fallback
 from app.scrapers.fallback import _datetime
 
 
+def _apify_token() -> str | None:
+    return os.getenv("APIFY_API_TOKEN") or os.getenv("APIFY_TOKEN")
+
+
 class InstagramApifyConnector(BaseConnector):
     """Collect public Instagram posts/comments through Apify provider.
 
@@ -29,7 +33,7 @@ class InstagramApifyConnector(BaseConnector):
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         apify = fallback.ApifyProvider(
             "instagram",
-            os.getenv("APIFY_TOKEN"),
+            _apify_token(),
             os.getenv("APIFY_INSTAGRAM_ACTOR_ID"),
             os.getenv("APIFY_INSTAGRAM_INPUT_JSON"),
         )
@@ -84,11 +88,12 @@ class FacebookApifyConnector(BaseConnector):
 
     async def fetch_latest(self, last_seen_item_id: str | None = None) -> list[RawItem]:
         # Ensure APIFY_TOKEN is configured; otherwise raise ProviderNotConfigured
-        if not os.getenv("APIFY_TOKEN"):
-            raise fallback.ProviderNotConfigured("Facebook Apify provider not configured: missing APIFY_TOKEN")
+        token = _apify_token()
+        if not token:
+            raise fallback.ProviderNotConfigured("Facebook Apify provider not configured: missing APIFY_API_TOKEN or APIFY_TOKEN")
         apify = fallback.ApifyProvider(
             "facebook",
-            os.getenv("APIFY_TOKEN"),
+            token,
             os.getenv("APIFY_FACEBOOK_ACTOR_ID"),
             os.getenv("APIFY_FACEBOOK_INPUT_JSON"),
         )

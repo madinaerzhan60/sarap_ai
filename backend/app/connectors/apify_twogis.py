@@ -46,7 +46,11 @@ class ApifyTwoGisConnector(BaseConnector):
         if not token:
             raise ProviderNotConfigured("APIFY_API_TOKEN or APIFY_TOKEN is empty")
 
-        actor_id = os.getenv("APIFY_TWOGIS_ACTOR_ID", "zen-studio/2gis-reviews-scraper").strip()
+        actor_id = (
+            os.getenv("APIFY_TWOGIS_ACTOR_ID")
+            or os.getenv("APIFY_2GIS_ACTOR_ID")
+            or "zen-studio/2gis-reviews-scraper"
+        ).strip()
         actor_path = actor_id.replace("/", "~")
         endpoint = f"https://api.apify.com/v2/acts/{actor_path}/run-sync-get-dataset-items"
 
