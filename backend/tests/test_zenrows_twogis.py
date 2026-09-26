@@ -10,6 +10,7 @@ import pytest
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.collectors.registry import SourceType, collector_registry
+from app.main import _should_run_history_sync
 from app.connectors.brightdata_twogis import BrightDataTwoGisConnector
 from app.connectors.reviews import TwoGisPlaywrightConnector
 from app.connectors import zenrows_twogis
@@ -232,6 +233,8 @@ def test_backfill_scrolls_controls_scroll_count(monkeypatch):
     assert len(instructions) == 2
     assert len(evaluate_actions) == 1
     assert "const scrollCount = 7" in evaluate_actions[0]["evaluate"]
+    assert "const noGrowthLimit" in evaluate_actions[0]["evaluate"]
+    assert "noGrowthIterations >= noGrowthLimit" in evaluate_actions[0]["evaluate"]
     assert "collectCurrentReviewCards" in evaluate_actions[0]["evaluate"]
     assert "data-sarap-accumulated-reviews" in evaluate_actions[0]["evaluate"]
 
@@ -251,6 +254,30 @@ def test_backfill_scrolls_40_generate_compact_query(monkeypatch):
     assert "const scrollCount = 40" in evaluate_actions[0]["evaluate"]
     assert DummyZenRowsClient.last_params["js_instructions"].count("scrollIntoView") == 1
     assert len(encoded_query) < 12000
+
+
+def test_backfill_completion_metadata_is_read_from_accumulator(monkeypatch):
+    monkeypatch.setenv("ZENROWS_API_KEY", "test-key")
+    DummyZenRowsClient.response = MockResponse(
+        text="""
+        <html><body>
+          <div data-sarap-accumulated-reviews="true" data-sarap-history-complete="true" data-sarap-no-growth-iterations="8">
+            <div class="_1rowqpjv" data-review-id="done-review">
+              <span title="Aruzhan">Aruzhan</span>
+              <div class="_83kmcy"><a>History item.</a></div>
+              <span class="_10c0hgu">2026-09-01T00:00:00+00:00</span>
+              <svg color="#ffb81c"></svg>
+            </div>
+          </div>
+        </body></html>
+        """
+    )
+    connector = ZenRowsTwoGisConnector(TWOGIS_URL)
+
+    asyncio.run(connector.fetch_latest(backfill=True))
+
+    assert connector.last_collection_metadata["history_complete"] is True
+    assert connector.last_collection_metadata["no_growth_iterations"] == 8
 
 
 def test_existing_2gis_parser_converts_zenrows_html_to_raw_items(monkeypatch):
@@ -301,6 +328,51 @@ def test_backfill_ignores_last_seen_item_id(monkeypatch):
     items = asyncio.run(connector.fetch_latest("known-review", backfill=True))
 
     assert [item.external_id for item in items] == ["new-review", "known-review"]
+
+
+def test_normal_sync_auto_selects_history_when_2gis_count_is_low(monkeypatch):
+    monkeypatch.setenv("TWOGIS_PROVIDER", "zenrows")
+    monkeypatch.setenv("TWOGIS_HISTORY_SYNC_MIN_STORED", "200")
+    monkeypatch.setattr("app.main._stored_source_count", lambda business_id, source_name: asyncio.sleep(0, result=97))
+
+    should_backfill, stored_count = asyncio.run(_should_run_history_sync(
+        {"source": "2GIS", "last_seen_item_id": "known-review"},
+        "4831e885-e309-4d28-8311-6e54cfb29059",
+        False,
+    ))
+
+    assert should_backfill is True
+    assert stored_count == 97
+
+
+def test_normal_sync_stays_incremental_after_history_threshold(monkeypatch):
+    monkeypatch.setenv("TWOGIS_PROVIDER", "zenrows")
+    monkeypatch.setenv("TWOGIS_HISTORY_SYNC_MIN_STORED", "200")
+    monkeypatch.setattr("app.main._stored_source_count", lambda business_id, source_name: asyncio.sleep(0, result=900))
+
+    should_backfill, stored_count = asyncio.run(_should_run_history_sync(
+        {"source": "2GIS", "last_seen_item_id": "newest-review"},
+        "4831e885-e309-4d28-8311-6e54cfb29059",
+        False,
+    ))
+
+    assert should_backfill is False
+    assert stored_count == 900
+
+
+def test_normal_sync_stays_incremental_after_history_marker(monkeypatch):
+    monkeypatch.setenv("TWOGIS_PROVIDER", "zenrows")
+    monkeypatch.setenv("TWOGIS_HISTORY_SYNC_MIN_STORED", "200")
+    monkeypatch.setattr("app.main._stored_source_count", lambda business_id, source_name: asyncio.sleep(0, result=40))
+
+    should_backfill, stored_count = asyncio.run(_should_run_history_sync(
+        {"source": "2GIS", "last_seen_published_at": "2026-09-26T00:00:00+00:00"},
+        "4831e885-e309-4d28-8311-6e54cfb29059",
+        False,
+    ))
+
+    assert should_backfill is False
+    assert stored_count == 40
 
 
 def test_duplicate_accumulated_cards_are_deduped(monkeypatch):

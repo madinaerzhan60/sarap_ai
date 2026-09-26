@@ -78,6 +78,14 @@ class CollectionResult:
 
 def _error_code(message: str) -> str:
     lowered = message.casefold()
+    if "url component 'query' too long" in lowered or "invalidurl" in lowered:
+        return "query_too_long"
+    if "readtimeout" in lowered or "connecttimeout" in lowered or "timed out" in lowered:
+        return "zenrows_timeout" if "zenrows" in lowered else "navigation_timeout"
+    if "no usable 2gis reviews found" in lowered:
+        return "parser_zero_items"
+    if "httpstatuserror" in lowered and "zenrows" in lowered:
+        return "zenrows_http_error"
     if "collector_unavailable" in lowered or "requires collector_worker_url" in lowered:
         return "collector_unavailable"
     for code in ("chromium_not_installed", "browser_launch_failed", "navigation_timeout", "parser_failed"):
@@ -112,6 +120,14 @@ def _friendly_collection_error(source: str, code: str) -> str:
         return f"{label} blocked automatic collection. Please try again later."
     if code == "rate_limited":
         return f"{label} is temporarily rate limited. Please try again later."
+    if code == "zenrows_timeout":
+        return f"{label} took too long to return reviews. Please try Sync again."
+    if code == "zenrows_http_error":
+        return f"{label} provider returned an error. Please try Sync again."
+    if code == "query_too_long":
+        return f"{label} sync request was too large. Please try again after the latest deployment."
+    if code == "parser_zero_items":
+        return f"{label} loaded, but no review cards were found."
     return f"{label} could not be reached. Please try again later."
 
 

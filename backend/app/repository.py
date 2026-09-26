@@ -69,6 +69,15 @@ class SupabaseRepository:
         )
         return bool(analysis_rows and risk_rows)
 
+    async def count_mentions(self, business_id: UUID, source: str) -> int:
+        rows = await self.request("GET", "mentions", params={
+            "select": "id",
+            "business_id": f"eq.{business_id}",
+            "source": f"ilike.{source}",
+            "limit": "10000",
+        })
+        return len(rows or [])
+
     async def persist_processed(self, result: ProcessedMention, provider: str = "local") -> ProcessedMention:
         m = result.mention
         existing_rows = await self.request("GET", "mentions", params={"select": "*", "business_id": f"eq.{m.business_id}", "content_hash": f"eq.{m.content_hash}", "limit": "1"})

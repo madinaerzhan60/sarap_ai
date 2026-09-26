@@ -88,6 +88,8 @@ class ZenRowsTwoGisConnector(BaseConnector):
         self.last_collection_metadata = {
             "scroll_count": _scroll_count(backfill=backfill),
             "accumulated_review_card_count": diagnostics["review_selector_count"],
+            "history_complete": diagnostics["history_complete"],
+            "no_growth_iterations": diagnostics["no_growth_iterations"],
             "parsed_count": len(items),
         }
         if not items:
@@ -131,6 +133,14 @@ def _scroll_count(*, backfill: bool = False) -> int:
         return max(0, min(int(raw), cap))
     except ValueError:
         return int(default)
+
+
+def _no_growth_limit() -> int:
+    raw = os.getenv("TWOGIS_ZENROWS_NO_GROWTH_LIMIT", "8")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 8
 
 
 def _extract_twogis_items(html: str, page_url: str) -> list[RawItem]:
@@ -199,6 +209,7 @@ const liveCards = Array.from(document.querySelectorAll('div._1rowqpjv'))
 """.strip()
     if backfill:
         scroll_count = _scroll_count(backfill=True)
+        no_growth_limit = _no_growth_limit()
         indented_collect_script = collect_script.replace("\n", "\n    ")
         backfill_script = f"""
 (async () => {{
@@ -208,8 +219,24 @@ const liveCards = Array.from(document.querySelectorAll('div._1rowqpjv'))
   }};
   const scrollCount = {scroll_count};
   const waitMs = {wait_ms};
+  const noGrowthLimit = {no_growth_limit};
+  let previousCount = 0;
+  let noGrowthIterations = 0;
+  let completed = false;
   for (let i = 0; i < scrollCount; i += 1) {{
     collectCurrentReviewCards();
+    const accumulator = document.querySelector('[data-sarap-accumulated-reviews="true"]');
+    const accumulatedCount = accumulator ? accumulator.querySelectorAll('div._1rowqpjv').length : 0;
+    if (accumulatedCount > previousCount) {{
+      previousCount = accumulatedCount;
+      noGrowthIterations = 0;
+    }} else {{
+      noGrowthIterations += 1;
+    }}
+    if (noGrowthIterations >= noGrowthLimit) {{
+      completed = true;
+      break;
+    }}
     const cards = Array.from(document.querySelectorAll('div._1rowqpjv'))
       .filter((card) => !card.closest('[data-sarap-accumulated-reviews="true"]'));
     if (cards.length) {{
@@ -226,6 +253,13 @@ const liveCards = Array.from(document.querySelectorAll('div._1rowqpjv'))
     if (waitMs > 0) await sleep(waitMs);
   }}
   collectCurrentReviewCards();
+  const accumulator = document.querySelector('[data-sarap-accumulated-reviews="true"]');
+  if (accumulator) {{
+    const finalCount = accumulator.querySelectorAll('div._1rowqpjv').length;
+    accumulator.setAttribute('data-sarap-history-complete', String(completed || noGrowthIterations >= noGrowthLimit));
+    accumulator.setAttribute('data-sarap-accumulated-count', String(finalCount));
+    accumulator.setAttribute('data-sarap-no-growth-iterations', String(noGrowthIterations));
+  }}
 }})();
 """.strip()
         instructions.append({"evaluate": backfill_script})
@@ -268,6 +302,8 @@ class _DiagnosticHtmlParser(HTMLParser):
         self.in_title = False
         self.title_parts: list[str] = []
         self.review_selector_count = 0
+        self.history_complete = False
+        self.no_growth_iterations = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag.lower() == "title":
@@ -277,6 +313,12 @@ class _DiagnosticHtmlParser(HTMLParser):
             classes = values.get("class", "").split()
             if "_1rowqpjv" in classes:
                 self.review_selector_count += 1
+            if values.get("data-sarap-accumulated-reviews") == "true":
+                self.history_complete = values.get("data-sarap-history-complete") == "true"
+                try:
+                    self.no_growth_iterations = int(values.get("data-sarap-no-growth-iterations") or "0")
+                except ValueError:
+                    self.no_growth_iterations = 0
 
     def handle_data(self, data: str) -> None:
         if self.in_title and data.strip():
@@ -313,6 +355,8 @@ def diagnose_zenrows_twogis_response(
         "block_evidence": blocked if blocked is not None else _looks_blocked(html, final_url),
         "blocked": blocked if blocked is not None else _looks_blocked(html, final_url),
         "review_selector_count": parser.review_selector_count,
+        "history_complete": parser.history_complete,
+        "no_growth_iterations": parser.no_growth_iterations,
     }
 
 

@@ -65,6 +65,38 @@ def _visible_product_mentions(items: list[ProcessedMention]) -> list[ProcessedMe
     ]
 
 
+def _history_threshold(source_name: str) -> int:
+    if str(source_name).casefold().strip() in {"2gis", "2gis maps"}:
+        raw = os.getenv("TWOGIS_HISTORY_SYNC_MIN_STORED", "200")
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 200
+    return 0
+
+
+async def _stored_source_count(business_id: UUID, source_name: str) -> int:
+    if repository.configured:
+        return await repository.count_mentions(business_id, source_name)
+    return sum(1 for item in processed if item.mention.business_id == business_id and item.mention.source.casefold() == source_name.casefold())
+
+
+async def _should_run_history_sync(source: dict, business_id: UUID, explicit_backfill: bool) -> tuple[bool, int]:
+    if explicit_backfill:
+        return True, await _stored_source_count(business_id, str(source.get("source", "")))
+    source_name = str(source.get("source", ""))
+    threshold = _history_threshold(source_name)
+    if threshold <= 0:
+        return False, await _stored_source_count(business_id, source_name)
+    provider = os.getenv("TWOGIS_PROVIDER", "direct").strip().lower()
+    if source_name.casefold().strip() not in {"2gis", "2gis maps"} or provider != "zenrows":
+        return False, await _stored_source_count(business_id, source_name)
+    stored_count = await _stored_source_count(business_id, source_name)
+    if source.get("last_seen_published_at") and stored_count > 0:
+        return False, stored_count
+    return stored_count < threshold, stored_count
+
+
 async def process_item(business_id: UUID, item: RawItem) -> ProcessedMention:
     mention = normalize(item, business_id)
     author_key = str(mention.metadata.get("author_key") or "")
@@ -494,11 +526,14 @@ async def poll_source(source_id: str, backfill: bool = False, context: AuthConte
     source = await repository.get_source(source_id) if repository.configured else next((s for s in sources if s["id"] == source_id), None)
     if not source:
         raise HTTPException(404, "Source not found")
-    await require_business_member(context, UUID(source["business_id"]))
+    business_id = UUID(source["business_id"])
+    await require_business_member(context, business_id)
+    effective_backfill = backfill
+    stored_before = 0
     try:
         credential_payload = None
         if repository.configured:
-            credential_row = await repository.get_source_credential(source_id=source_id, business_id=UUID(source["business_id"]))
+            credential_row = await repository.get_source_credential(source_id=source_id, business_id=business_id)
             if credential_row:
                 expires_at = credential_row.get("expires_at")
                 if expires_at and datetime.fromisoformat(expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc):
@@ -509,12 +544,13 @@ async def poll_source(source_id: str, backfill: bool = False, context: AuthConte
                     source_connection_id=source_id,
                     provider=credential_row["provider"],
                 )
-        last_seen_item_id = None if backfill else source.get("last_seen_item_id")
+        effective_backfill, stored_before = await _should_run_history_sync(source, business_id, backfill)
+        last_seen_item_id = None if effective_backfill else source.get("last_seen_item_id")
         if repository.configured and last_seen_item_id:
-            complete = await repository.external_item_is_complete(UUID(source["business_id"]), str(source["source"]), last_seen_item_id)
+            complete = await repository.external_item_is_complete(business_id, str(source["source"]), last_seen_item_id)
             if not complete:
                 last_seen_item_id = None
-        collection = await collector_registry.collect(source, credential_payload, last_seen_item_id, backfill=backfill)
+        collection = await collector_registry.collect(source, credential_payload, last_seen_item_id, backfill=effective_backfill)
     except (ConnectorUnavailable, CredentialEncryptionError) as exc:
         if repository.configured:
             await repository.update_source(source_id, {"status": "error", "error_message": str(exc), "last_checked_at": datetime.now(timezone.utc).isoformat()})
@@ -535,25 +571,53 @@ async def poll_source(source_id: str, backfill: bool = False, context: AuthConte
             "error_code": collection.error_code, "message": collection.error_message, "detail": collection.error_message,
         })
     items = collection.items
-    if items and not backfill:
+    if items:
         source["last_seen_item_id"] = items[0].external_id
     source["active_collection_method"] = collection.provider
+    results = [await process_item(business_id, item) for item in items]
+    duplicates = sum(1 for result in results if result.duplicate)
+    new_count = len(results) - duplicates
+    stored_after = stored_before + new_count
+    if repository.configured:
+        try:
+            stored_after = await repository.count_mentions(business_id, str(source["source"]))
+        except RepositoryUnavailable:
+            stored_after = stored_before + new_count
+    threshold = _history_threshold(str(source.get("source", "")))
+    historical_complete = not effective_backfill or bool(collection.metadata.get("history_complete")) or (threshold > 0 and stored_after >= threshold)
+    if effective_backfill:
+        collection.metadata["historical_complete"] = historical_complete
+        collection.metadata["stored_before_sync"] = stored_before
+        collection.metadata["total_stored_after_sync"] = stored_after
     if repository.configured:
         success_status = "discovery_monitoring" if collection.provider == "discovery" else ("active" if items else "no_new_items")
         update_values = {"active_collection_method": source["active_collection_method"], "last_checked_at": datetime.now(timezone.utc).isoformat(), "status": success_status, "error_message": None}
-        if not backfill:
+        if source.get("last_seen_item_id"):
             update_values["last_seen_item_id"] = source.get("last_seen_item_id")
+        if effective_backfill and historical_complete:
+            update_values["last_seen_published_at"] = datetime.now(timezone.utc).isoformat()
         await repository.update_source(source_id, update_values)
-    results = [await process_item(UUID(source["business_id"]), item) for item in items]
-    duplicates = sum(1 for result in results if result.duplicate)
+    logger.info(
+        "source=%s provider=%s mode=%s parsed=%s new=%s duplicates=%s total_stored=%s historical_complete=%s",
+        collection.source,
+        collection.provider,
+        "backfill" if effective_backfill else "incremental",
+        collection.collected_count,
+        new_count,
+        duplicates,
+        stored_after,
+        historical_complete,
+    )
     payload = {
         "status": "success", "source": collection.source, "provider": collection.provider,
-        "mode": "backfill" if backfill else "incremental",
-        "collected": collection.collected_count, "new": len(results) - duplicates,
+        "mode": "backfill" if effective_backfill else "incremental",
+        "collected": collection.collected_count, "parsed": collection.collected_count, "new": new_count,
         "duplicates": duplicates, "warnings": collection.warnings,
         "collection_metadata": collection.metadata,
+        "historical_complete": historical_complete,
+        "total_stored_after_sync": stored_after,
         "items": [result.model_dump(mode="json") for result in results],
-        "message": "No new reviews" if not results else f"{len(results) - duplicates} new item(s)",
+        "message": "No new reviews" if not results else f"{new_count} new item(s)",
     }
     return JSONResponse(content=payload)
 

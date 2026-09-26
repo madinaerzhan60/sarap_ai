@@ -469,7 +469,7 @@ async function pollBackendSource(source) {
   const body=await response.json();
   if(!response.ok) throw new Error(body.message||body.detail||'Collection failed');
   const collected=Number(body.collected||0),added=Number(body.new||0),duplicates=Number(body.duplicates||0);
-  source.items+=added;
+  source.items=Number(source.items||0)+added;
   source.last='Just now';
   source.method=body.provider||source.method;
   source.status=body.provider==='discovery'?'Discovery monitoring':added?'Active':'No new items';
@@ -481,8 +481,14 @@ async function pollBackendSource(source) {
     }catch(error){console.warn('Collection succeeded, but workspace refresh failed:',error);}
   }
   saveState(); render();
-  const provider=body.provider?` via ${body.provider}`:'';
-  toast('Collection finished',added?`${added} new item(s) saved${provider}. ${duplicates} duplicate(s) skipped.`:(body.message||'No new reviews'));
+  if(source.name?.toLowerCase().includes('2gis')){
+    const total=Number(body.total_stored_after_sync||source.items||0);
+    const suffix=body.mode==='backfill'&&body.historical_complete===false?' More history may remain.':'';
+    toast('2GIS sync complete',`${added} new review${added===1?'':'s'}, ${duplicates} duplicate${duplicates===1?'':'s'} skipped. ${total} total stored.${suffix}`);
+  }else{
+    const provider=body.provider?` via ${body.provider}`:'';
+    toast('Collection finished',added?`${added} new item(s) saved${provider}. ${duplicates} duplicate(s) skipped.`:(body.message||'No new reviews'));
+  }
 }
 
 function mapStoredSource(source, previous=null) {
