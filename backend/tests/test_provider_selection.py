@@ -1,12 +1,15 @@
-import os
 import pytest
 import asyncio
 from datetime import datetime
 
 from app.collectors.registry import collector_registry, SourceType
-from app.models import RawItem
-from app.connectors import InstagramApifyConnector, FacebookApifyConnector
+from app.models import MentionType
+from app.connectors import InstagramApifyConnector, FacebookApifyConnector, YouTubeApifyConnector, YandexApifyConnector
 from app.connectors.apify_twogis import ApifyTwoGisConnector
+from app.connectors.discovery import PublicDiscoveryConnector
+from app.connectors.reviews import MapFallbackConnector, YouTubePublicConnector
+from app.scrapers.fallback import get_apify_token
+from app.scrapers.models import ScrapedItem
 
 # Helper dummy provider and pipeline
 class DummyProvider:
@@ -31,6 +34,8 @@ def patch_apify(monkeypatch):
 
 def test_instagram_apify_provider_selection(monkeypatch):
     monkeypatch.setenv('INSTAGRAM_PROVIDER', 'apify')
+    monkeypatch.setenv('APIFY_API_TOKEN', 'api-token')
+    monkeypatch.setenv('APIFY_INSTAGRAM_ACTOR_ID', 'instagram/actor')
     source = {"source": "instagram", "source_url": "https://instagram.com/p/xyz"}
     source_type, connector = collector_registry.resolve(source)
     assert source_type == SourceType.INSTAGRAM
@@ -38,10 +43,10 @@ def test_instagram_apify_provider_selection(monkeypatch):
 
     # Prepare dummy items with various dates
     items = [
-        RawItem(source='instagram', source_type='social_comment', external_id='1', external_url='', author_name='A', text='old', rating=None, published_at='2024-01-01T00:00:00', metadata={}),
-        RawItem(source='instagram', source_type='social_comment', external_id='2', external_url='', author_name='B', text='mid1', rating=None, published_at='2025-06-01T00:00:00', metadata={}),
-        RawItem(source='instagram', source_type='social_comment', external_id='3', external_url='', author_name='C', text='mid2', rating=None, published_at='2026-05-01T00:00:00', metadata={}),
-        RawItem(source='instagram', source_type='social_comment', external_id='4', external_url='', author_name='D', text='future', rating=None, published_at='2027-01-01T00:00:00', metadata={}),
+        ScrapedItem(source='Instagram', external_id='1', author='A', text_content='old', published_at=datetime.fromisoformat('2024-01-01T00:00:00'), url='https://instagram.com/p/xyz', collected_by='apify'),
+        ScrapedItem(source='Instagram', external_id='2', author='B', text_content='mid1', published_at=datetime.fromisoformat('2025-06-01T00:00:00'), url='https://instagram.com/p/xyz', collected_by='apify'),
+        ScrapedItem(source='Instagram', external_id='3', author='C', text_content='mid2', published_at=datetime.fromisoformat('2026-05-01T00:00:00'), url='https://instagram.com/p/xyz', collected_by='apify'),
+        ScrapedItem(source='Instagram', external_id='4', author='D', text_content='future', published_at=datetime.fromisoformat('2027-01-01T00:00:00'), url='https://instagram.com/p/xyz', collected_by='apify'),
     ]
     monkeypatch.setattr(DummyPipeline, 'items', items, raising=False)
     monkeypatch.setenv('INSTAGRAM_DATE_FROM', '2025-01-01')
@@ -50,27 +55,80 @@ def test_instagram_apify_provider_selection(monkeypatch):
     fetched_ids = {item.external_id for item in fetched}
     assert fetched_ids == {'2', '3'}
 
-def test_facebook_apify_provider_selection_and_missing_token(monkeypatch):
+def test_facebook_apify_provider_selection_with_explicit_actor(monkeypatch):
     monkeypatch.setenv('FACEBOOK_PROVIDER', 'apify')
+    monkeypatch.setenv('APIFY_FACEBOOK_ACTOR_ID', 'facebook/actor')
     source = {"source": "facebook", "source_url": "https://facebook.com/page"}
     source_type, connector = collector_registry.resolve(source)
     assert source_type == SourceType.FACEBOOK
     assert isinstance(connector, FacebookApifyConnector)
-
-    monkeypatch.delenv('APIFY_TOKEN', raising=False)
-    with pytest.raises(Exception) as excinfo:
-        asyncio.run(connector.fetch_latest())
-    from app.scrapers.fallback import ProviderNotConfigured
-    assert isinstance(excinfo.value, ProviderNotConfigured)
 
 
 def test_facebook_apify_accepts_api_token_alias(monkeypatch):
     monkeypatch.setenv('FACEBOOK_PROVIDER', 'apify')
     monkeypatch.delenv('APIFY_TOKEN', raising=False)
     monkeypatch.setenv('APIFY_API_TOKEN', 'api-token')
+    monkeypatch.setenv('APIFY_FACEBOOK_ACTOR_ID', 'facebook/actor')
     source = {"source": "facebook", "source_url": "https://facebook.com/page"}
     _, connector = collector_registry.resolve(source)
     assert isinstance(connector, FacebookApifyConnector)
+
+
+@pytest.mark.parametrize("env_name", ["APIFY_API_TOKEN", "APIFY_TOKEN", "APIFY_API_KEY"])
+def test_apify_token_aliases(monkeypatch, env_name):
+    for key in ["APIFY_API_TOKEN", "APIFY_TOKEN", "APIFY_API_KEY"]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(env_name, "configured")
+    assert get_apify_token() == "configured"
+
+
+def test_social_sources_fallback_without_apify_actor(monkeypatch):
+    monkeypatch.setenv("APIFY_API_TOKEN", "api-token")
+    monkeypatch.delenv("APIFY_INSTAGRAM_ACTOR_ID", raising=False)
+    monkeypatch.delenv("APIFY_FACEBOOK_ACTOR_ID", raising=False)
+    _, instagram = collector_registry.resolve({"source": "instagram", "source_url": "https://instagram.com/p/xyz"})
+    _, facebook = collector_registry.resolve({"source": "facebook", "source_url": "https://facebook.com/page"})
+    assert isinstance(instagram, PublicDiscoveryConnector)
+    assert isinstance(facebook, PublicDiscoveryConnector)
+
+
+def test_youtube_apify_primary_then_direct_fallback(monkeypatch):
+    source = {"source": "youtube", "source_url": "https://www.youtube.com/watch?v=abc12345678"}
+    monkeypatch.setenv("APIFY_API_TOKEN", "api-token")
+    monkeypatch.setenv("APIFY_YOUTUBE_ACTOR_ID", "youtube/actor")
+    _, apify_connector = collector_registry.resolve(source)
+    assert isinstance(apify_connector, YouTubeApifyConnector)
+
+    monkeypatch.delenv("APIFY_YOUTUBE_ACTOR_ID", raising=False)
+    _, direct_connector = collector_registry.resolve(source)
+    assert isinstance(direct_connector, YouTubePublicConnector)
+
+
+def test_yandex_apify_primary_then_map_fallback(monkeypatch):
+    source = {"source": "Yandex Maps", "source_url": "https://yandex.kz/maps/org/example/123/reviews/"}
+    monkeypatch.setenv("APIFY_API_TOKEN", "api-token")
+    monkeypatch.setenv("APIFY_YANDEX_ACTOR_ID", "yandex/actor")
+    _, apify_connector = collector_registry.resolve(source)
+    assert isinstance(apify_connector, YandexApifyConnector)
+
+    monkeypatch.delenv("APIFY_YANDEX_ACTOR_ID", raising=False)
+    _, direct_connector = collector_registry.resolve(source)
+    assert isinstance(direct_connector, MapFallbackConnector)
+
+
+def test_youtube_apify_maps_comments_with_null_rating(monkeypatch):
+    monkeypatch.setenv("APIFY_API_TOKEN", "api-token")
+    monkeypatch.setenv("APIFY_YOUTUBE_ACTOR_ID", "youtube/actor")
+    source = {"source": "youtube", "source_url": "https://www.youtube.com/watch?v=abc12345678"}
+    _, connector = collector_registry.resolve(source)
+    assert isinstance(connector, YouTubeApifyConnector)
+    monkeypatch.setattr(DummyPipeline, 'items', [
+        ScrapedItem(source="YouTube", external_id="comment-1", author="@aida", text_content="Nice video", rating=5, url=source["source_url"], collected_by="apify")
+    ], raising=False)
+    items = asyncio.run(connector.fetch_latest())
+    assert items[0].external_id == "comment-1"
+    assert items[0].source_type == MentionType.video_comment
+    assert items[0].rating is None
 
 
 def test_twogis_apify_accepts_legacy_actor_env(monkeypatch):

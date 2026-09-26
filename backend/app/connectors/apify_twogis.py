@@ -14,7 +14,7 @@ import httpx
 from app.connectors.base import BaseConnector
 from app.connectors.reviews import normalize_twogis_business_url
 from app.models import ConnectionType, MentionType, RawItem
-from app.scrapers.fallback import ProviderError, ProviderNotConfigured
+from app.scrapers.fallback import ProviderError, ProviderNotConfigured, get_apify_actor_id, get_apify_token
 
 logger = logging.getLogger("sarap.connectors.apify_twogis")
 
@@ -42,15 +42,11 @@ class ApifyTwoGisConnector(BaseConnector):
         self.business_id = business_id
 
     async def fetch_latest(self, last_seen_item_id: str | None = None, backfill: bool = False) -> list[RawItem]:
-        token = (os.getenv("APIFY_API_TOKEN") or os.getenv("APIFY_TOKEN") or "").strip()
+        token = get_apify_token()
         if not token:
-            raise ProviderNotConfigured("APIFY_API_TOKEN or APIFY_TOKEN is empty")
+            raise ProviderNotConfigured("APIFY_API_TOKEN, APIFY_TOKEN, or APIFY_API_KEY is empty")
 
-        actor_id = (
-            os.getenv("APIFY_TWOGIS_ACTOR_ID")
-            or os.getenv("APIFY_2GIS_ACTOR_ID")
-            or "zen-studio/2gis-reviews-scraper"
-        ).strip()
+        actor_id = get_apify_actor_id("2GIS", "APIFY_TWOGIS_ACTOR_ID", "APIFY_2GIS_ACTOR_ID", default="zen-studio/2gis-reviews-scraper")
         actor_path = actor_id.replace("/", "~")
         endpoint = f"https://api.apify.com/v2/acts/{actor_path}/run-sync-get-dataset-items"
 

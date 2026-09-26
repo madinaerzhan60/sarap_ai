@@ -10,6 +10,7 @@ from typing import Any
 
 from app.connectors.base import BaseConnector
 from app.models import MentionType, RawItem
+from app.scrapers.fallback import get_apify_actor_id, get_apify_token
 
 logger = logging.getLogger("sarap.collectors")
 
@@ -163,7 +164,7 @@ class CollectorRegistry:
         mode = str(source.get("collection_mode", "auto"))
         use_worker = bool(os.getenv("COLLECTOR_WORKER_URL", "").strip())
         if source_type == SourceType.TWO_GIS:
-            has_apify_token = bool(os.getenv("APIFY_API_TOKEN") or os.getenv("APIFY_TOKEN"))
+            has_apify_token = bool(get_apify_token())
             default_provider = "apify" if has_apify_token else "direct"
             provider_key = os.getenv("TWOGIS_PROVIDER", default_provider).strip().lower()
 
@@ -193,8 +194,14 @@ class CollectorRegistry:
             return source_type, TwoGisPlaywrightConnector(page_url, business_id)
 
         if source_type == SourceType.YANDEX_MAPS:
-            provider_key = os.getenv("YANDEX_PROVIDER", "direct").strip().lower()
+            yandex_actor = get_apify_actor_id("yandex_maps", "APIFY_YANDEX_ACTOR_ID")
+            has_apify = bool(get_apify_token() and yandex_actor)
+            provider_key = os.getenv("YANDEX_PROVIDER", "apify" if has_apify else "direct").strip().lower()
             from app.connectors.reviews import MapFallbackConnector
+
+            if provider_key == "apify" and yandex_actor:
+                from app.connectors import YandexApifyConnector
+                return source_type, YandexApifyConnector(page_url, business_id)
 
             if provider_key == "direct":
                 return source_type, MapFallbackConnector(
@@ -222,15 +229,18 @@ class CollectorRegistry:
                 raise ConnectorUnavailable("Google Maps fallback requires a public Google Maps business URL")
             return SourceType.GOOGLE_MAPS, MapFallbackConnector("google_maps", page_url, business_id)
         if source_type == SourceType.INSTAGRAM:
-            # Provider selection via environment variable (default to direct)
             env_var = f"{source_type.value.upper().replace('_', '')}_PROVIDER"
-            provider_key = os.getenv(env_var, "direct").strip().lower()
+            instagram_actor = get_apify_actor_id("instagram", "APIFY_INSTAGRAM_ACTOR_ID")
+            has_apify = bool(get_apify_token() and instagram_actor)
+            provider_key = os.getenv(env_var, "apify" if has_apify else "direct").strip().lower()
             from app.connectors import InstagramApifyConnector
             from app.connectors.reviews import (
                 InstagramFallbackConnector,
                 InstagramGraphCommentsConnector,
             )
             from app.connectors.discovery import PublicDiscoveryConnector
+            if provider_key == "apify" and instagram_actor:
+                return source_type, InstagramApifyConnector(page_url, business_id)
             if provider_key == "direct":
                 # If official credentials are supplied, use the official Graph connector
                 if credentials and credentials.get("access_token"):
@@ -241,14 +251,18 @@ class CollectorRegistry:
                     )
                 # Direct public discovery
                 return source_type, PublicDiscoveryConnector("instagram", page_url)
-            elif provider_key == "apify":
-                return source_type, InstagramApifyConnector(page_url, business_id)
             else:
                 # Use fallback pipeline (Playwright, SociaVault, SocialCrawl, Apify)
                 return source_type, InstagramFallbackConnector(page_url, business_id)
         if source_type == SourceType.YOUTUBE:
             if not page_url:
                 raise ConnectorUnavailable("YouTube collection requires a public video or channel URL")
+            youtube_actor = get_apify_actor_id("youtube", "APIFY_YOUTUBE_ACTOR_ID")
+            has_apify = bool(get_apify_token() and youtube_actor)
+            provider_key = os.getenv("YOUTUBE_PROVIDER", "apify" if has_apify else "direct").strip().lower()
+            if provider_key == "apify" and youtube_actor:
+                from app.connectors import YouTubeApifyConnector
+                return source_type, YouTubeApifyConnector(page_url, business_id)
             return source_type, YouTubePublicConnector(page_url)
         if source_type == SourceType.THREADS:
             if not page_url:
@@ -257,15 +271,16 @@ class CollectorRegistry:
             connector = ModularScraperConnector("threads", page_url, lambda: ThreadsScraper(cast(SupabaseRawReviewStore, None), proxies, os.getenv("THREADS_STORAGE_STATE")), MentionType.social_post)
             return source_type, connector
         if source_type == SourceType.FACEBOOK:
-            # Provider selection via environment variable (default to direct)
             env_var = f"{source_type.value.upper()}_PROVIDER"
-            provider_key = os.getenv(env_var, "direct").strip().lower()
+            facebook_actor = get_apify_actor_id("facebook", "APIFY_FACEBOOK_ACTOR_ID")
+            has_apify = bool(get_apify_token() and facebook_actor)
+            provider_key = os.getenv(env_var, "apify" if has_apify else "direct").strip().lower()
             from app.connectors import FacebookApifyConnector
             from app.connectors.discovery import PublicDiscoveryConnector
+            if provider_key == "apify" and facebook_actor:
+                return source_type, FacebookApifyConnector(page_url, business_id)
             if provider_key == "direct":
                 return source_type, PublicDiscoveryConnector("facebook", page_url)
-            elif provider_key == "apify":
-                return source_type, FacebookApifyConnector(page_url, business_id)
             else:
                 raise ConnectorUnavailable(f"Unsupported Facebook provider: {provider_key}")
         elif source_type in {SourceType.LINKEDIN, SourceType.REDDIT}:

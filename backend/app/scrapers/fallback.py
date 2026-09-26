@@ -55,6 +55,25 @@ def paid_provider_enabled(provider: str) -> bool:
     return env_enabled("ENABLE_PAID_FALLBACKS") and env_enabled(f"ENABLE_{provider.upper()}")
 
 
+def get_apify_token() -> str:
+    """Canonical Apify token lookup with legacy env-name compatibility."""
+    return (
+        os.getenv("APIFY_API_TOKEN")
+        or os.getenv("APIFY_TOKEN")
+        or os.getenv("APIFY_API_KEY")
+        or ""
+    ).strip()
+
+
+def get_apify_actor_id(platform: str, *aliases: str, default: str | None = None) -> str:
+    names = [*aliases, f"APIFY_{platform.upper()}_ACTOR_ID"]
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return (default or "").strip()
+
+
 class ProviderUsageGuard:
     """Small runtime circuit breaker; durable counters are also persisted by production workers."""
 
@@ -134,7 +153,7 @@ def _list(value: Any) -> list[dict[str, Any]]:
 
 
 def normalize_api_item(row: dict[str, Any], platform: str, target_url: str, collected_by: str) -> ScrapedItem | None:
-    content = _first(row, "text", "review_text", "reviewText", "comment", "caption", "content.text", "content")
+    content = _first(row, "text", "review_text", "reviewText", "comment", "caption", "message", "body", "content.text", "content", "snippet.topLevelComment.snippet.textDisplay")
     if isinstance(content, dict):
         content = _first(content, "text", "value")
     if not isinstance(content, str) or len(content.strip()) < 2:
@@ -147,14 +166,14 @@ def normalize_api_item(row: dict[str, Any], platform: str, target_url: str, coll
             parsed_rating = None
     except (TypeError, ValueError):
         parsed_rating = None
-    external_id = str(_first(row, "id", "comment_id", "commentId", "review_id", "reviewId", default="")) or None
-    published = _datetime(_first(row, "created_at", "createdAt", "published_at", "publishedAt", "publishedTime", "dateCreated", "date", "timestamp"))
+    external_id = str(_first(row, "id", "comment_id", "commentId", "review_id", "reviewId", "postId", "videoId", default="")) or None
+    published = _datetime(_first(row, "created_at", "createdAt", "published_at", "publishedAt", "publishedTime", "dateCreated", "date", "timestamp", "snippet.topLevelComment.snippet.publishedAt"))
     metadata = {
         "likes_count": _first(row, "likes_count", "likesCount", "likes", "likeCount", "comment_like_count", "engagement.likes", default=0),
         "business_reply": _first(row, "replyText", "business_reply"),
         "raw_provider_fields": sorted(row.keys()),
     }
-    source_names = {"2gis": "2GIS", "instagram": "Instagram", "youtube": "YouTube"}
+    source_names = {"2gis": "2GIS", "instagram": "Instagram", "youtube": "YouTube", "facebook": "Facebook", "yandex_maps": "Yandex Maps"}
     return ScrapedItem(
         source=source_names.get(platform, platform),
         author=str(author or "Unknown"),
@@ -455,15 +474,17 @@ class ScrapflyProvider(CollectorProvider):
 class ApifyProvider(CollectorProvider):
     name = "apify"
 
-    def __init__(self, platform: str, token: str | None, actor_id: str | None, input_json: str | None = None) -> None:
+    def __init__(self, platform: str, token: str | None = None, actor_id: str | None = None, input_json: str | None = None, *, require_paid_opt_in: bool = True) -> None:
         self.platform = platform
-        self.token = (token or "").strip()
+        self.token = (token or get_apify_token()).strip()
         self.actor_id = (actor_id or "").strip()
         self.input_json = (input_json or "").strip()
+        self.require_paid_opt_in = require_paid_opt_in
 
     @property
     def configured(self) -> bool:
-        return paid_provider_enabled("apify") and bool(self.token and self.actor_id)
+        opt_in = paid_provider_enabled("apify") if self.require_paid_opt_in else True
+        return opt_in and bool(self.token and self.actor_id)
 
     async def collect(self, target_url: str, limit: int) -> list[ScrapedItem]:
         if not self.configured:
@@ -484,6 +505,10 @@ class ApifyProvider(CollectorProvider):
             }
         elif self.platform == "instagram":
             run_input = {"directUrls": [target_url], "resultsLimit": maximum}
+        elif self.platform == "youtube":
+            run_input = {"startUrls": [{"url": target_url}], "maxResults": maximum, "maxComments": maximum}
+        elif self.platform == "facebook":
+            run_input = {"startUrls": [{"url": target_url}], "resultsLimit": maximum, "maxItems": maximum}
         else:
             run_input = {"startUrls": [{"url": target_url}], "maxItems": maximum}
         if self.platform == "2gis":
