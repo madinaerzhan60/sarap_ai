@@ -194,7 +194,14 @@ function overviewAnalytics(){
   const data=state.analytics||{total:state.mentions.length,positive:state.mentions.filter(x=>x.sentiment==='positive').length,negative:state.mentions.filter(x=>x.sentiment==='negative').length,neutral:state.mentions.filter(x=>x.sentiment==='neutral'||x.sentiment==='mixed').length,top_keywords:[]};
   const total=data.total||0, positivePct=total?Math.round(data.positive/total*100):0, negativePct=total?Math.round(data.negative/total*100):0, recommendationGroups=state.recommendations?.recommendations||{};
   const keywordMax=Math.max(...(data.top_keywords||[]).map(x=>x.count),1);
-  const recommendationText=state.recommendations?.error?'Recommendations temporarily unavailable.':state.recommendations?.loading?(state.recommendations?.summary||'Analyzing repeated themes from saved mentions...'):state.recommendations?.summary||'Not enough data yet';
+  const hasRecommendations=Object.values(recommendationGroups).some(items=>(items||[]).length);
+  const recommendationText=state.recommendations?.error&&hasRecommendations
+    ? `${state.recommendations?.overall_summary||state.recommendations?.summary||'Showing latest saved recommendations.'} Refresh failed; keeping the latest result.`
+    : state.recommendations?.error
+      ? 'Recommendations temporarily unavailable.'
+      : state.recommendations?.loading
+        ? (state.recommendations?.overall_summary||state.recommendations?.summary||'Analyzing repeated themes from saved mentions...')
+        : state.recommendations?.overall_summary||state.recommendations?.summary||'Not enough data yet';
   const renderRecommendation=item=>typeof item==='string'?`<li>${escapeHtml(item)}</li>`:`<li><strong>${escapeHtml(item.title||'Recommendation')}</strong><span>${escapeHtml(item.evidence||'')}</span><span>${escapeHtml(item.action||'')}</span>${item.count?`<small>${escapeHtml(String(item.count))} mentions</small>`:''}</li>`;
   return `<section class="overview-section"><div class="overview-section-head"><div><span class="section-label">Analytics</span><h2>Reputation analysis</h2><p>Live breakdown from the latest saved workspace data.</p></div></div><div class="grid content-split"><article class="card glass"><div class="card-head"><div><h2>Sentiment distribution</h2><p>${data.period_start||'Current'} to ${data.period_end||'now'}</p></div></div><div class="sentiment-donut" style="--positive:${positivePct}%;--negative:${positivePct+negativePct}%"><div><strong>${total}</strong><small>mentions</small></div></div><div class="legend"><span><i></i>Positive ${data.positive||0}</span><span><i class="neg"></i>Negative ${data.negative||0}</span><span>Neutral ${data.neutral||0}</span></div></article><article class="card glass"><div class="card-head"><div><h2>Top topics</h2><p>Repeated meaningful themes in the selected period</p></div></div>${(data.top_keywords||[]).map(item=>progressRow(item.word,item.count,keywordMax,'var(--emerald)')).join('')||'<p class="muted">Topics will appear after reviews are collected.</p>'}</article></div><article class="card glass recommendations-card"><div class="card-head"><div><h2>AI business recommendations</h2><p>Repeated evidence from included mentions</p></div></div><p class="summary">${escapeHtml(recommendationText)}</p><div class="grid recommendation-grid">${[['urgent_fix','Urgent fix'],['improve','Improve'],['keep_doing','Keep doing']].map(([key,title])=>`<article class="recommendation-item"><h3>${title}</h3><ul>${(recommendationGroups[key]||[]).map(renderRecommendation).join('')||'<li class="muted">Not enough data yet</li>'}</ul></article>`).join('')}</div></article></section>`;
 }
@@ -618,7 +625,7 @@ async function loadProductData(){
 }
 async function loadAnalyticsData(refresh=false){
   if(state.session?.demo||!state.business?.id)return;
-  state.recommendations={...(state.recommendations||{}),loading:true,error:false};if(state.route==='overview')render();
+  state.recommendations={...(state.recommendations||{}),loading:true,error:false};if(state.route==='overview'&&!state.recommendations?.summary)render();
   try{
     const headers=await apiAuthHeaders();
     const analyticsResponse=await fetch(apiPath(`/api/analytics?business_id=${encodeURIComponent(state.business.id)}&days=30`),{headers});
@@ -627,7 +634,7 @@ async function loadAnalyticsData(refresh=false){
     const recommendationResponse=await fetch(apiPath(`/api/recommendations?business_id=${encodeURIComponent(state.business.id)}&days=30${refresh?'&refresh=true':''}`),{headers});
     if(!recommendationResponse.ok)throw new Error('Recommendations temporarily unavailable');
     state.recommendations={...(await recommendationResponse.json()),loading:false,error:false};saveState();if(state.route==='overview')render();
-  }catch(error){state.recommendations={...(state.recommendations||{}),loading:false,error:true};saveState();if(state.route==='overview')render();toast('Recommendations unavailable','Please try again later.');}
+  }catch(error){state.recommendations={...(state.recommendations||{}),loading:false,error:true};saveState();if(state.route==='overview')render();if(!state.recommendations?.summary)toast('Recommendations unavailable','Please try again later.');}
 }
 async function loadAdminData(){if(state.session?.role!=='admin')return;try{const response=await fetch(apiPath('/api/admin/overview'),{headers:await apiAuthHeaders()});if(!response.ok)throw new Error((await response.json()).detail||'Could not load admin data');state.admin=await response.json();saveState();render();}catch(error){toast('Admin data unavailable',error.message);}}
 

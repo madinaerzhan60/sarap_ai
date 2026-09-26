@@ -704,8 +704,8 @@ def _topic_title(topic: str) -> str:
     return TOPIC_TITLES_RU.get(topic, topic.replace("_", " "))
 
 
-def _recommendation(title: str, evidence: str, action: str, count: int) -> dict[str, Any]:
-    return {"title": title, "evidence": evidence, "action": action, "count": count}
+def _recommendation(topic: str, title: str, evidence: str, action: str, count: int) -> dict[str, Any]:
+    return {"title": title, "evidence": evidence, "action": action, "count": count, "topic": topic}
 
 
 def _build_business_recommendations(rows: list[ProcessedMention], industry: str) -> dict[str, Any]:
@@ -727,6 +727,7 @@ def _build_business_recommendations(rows: list[ProcessedMention], industry: str)
 
     urgent = [
         _recommendation(
+            topic,
             f"Срочно исправить: {_topic_title(topic)}",
             f"{count} повторяющихся риск-сигнала: {examples.get(topic, '').rstrip('.')}.",
             TOPIC_ACTIONS_RU.get(topic, "Разобрать повторяющиеся жалобы и назначить ответственного за исправление."),
@@ -738,6 +739,7 @@ def _build_business_recommendations(rows: list[ProcessedMention], industry: str)
     urgent_topics = {topic for topic, count in high_risk.items() if count >= 2}
     improve = [
         _recommendation(
+            topic,
             f"Улучшить: {_topic_title(topic)}",
             f"{count} негативных упоминания: {examples.get(topic, '').rstrip('.')}.",
             TOPIC_ACTIONS_RU.get(topic, "Проверить повторяющуюся проблему и подготовить понятный план улучшения."),
@@ -748,6 +750,7 @@ def _build_business_recommendations(rows: list[ProcessedMention], industry: str)
     ][:3]
     keep_doing = [
         _recommendation(
+            topic,
             f"Сохранять: {_topic_title(topic)}",
             f"{count} положительных упоминания: {examples.get(topic, '').rstrip('.')}.",
             TOPIC_ACTIONS_RU.get(topic, "Сохранить практики, которые клиенты повторно отмечают как сильную сторону."),
@@ -757,17 +760,27 @@ def _build_business_recommendations(rows: list[ProcessedMention], industry: str)
         if count >= 2
     ]
 
-    strengths = ", ".join(f"{_topic_title(topic)} — {count}" for topic, count in positive.most_common(5) if count >= 2)
-    weaknesses = ", ".join(f"{_topic_title(topic)} — {count}" for topic, count in negative.most_common(5) if count >= 2)
+    main_strengths = [{"topic": topic, "title": _topic_title(topic), "count": count} for topic, count in positive.most_common(5) if count >= 2]
+    main_weaknesses = [{"topic": topic, "title": _topic_title(topic), "count": count} for topic, count in negative.most_common(5) if count >= 2]
+    risk_signals = [{"topic": topic, "title": _topic_title(topic), "count": count} for topic, count in high_risk.most_common(5) if count >= 2]
+    strengths = ", ".join(f"{item['title']} — {item['count']}" for item in main_strengths)
+    weaknesses = ", ".join(f"{item['title']} — {item['count']}" for item in main_weaknesses)
     if strengths or weaknesses:
         summary = (
-            f"Общая картина для {industry}: "
-            f"сильные темы: {strengths or 'нет устойчивых повторов'}; "
+            f"Сильные темы: {strengths or 'нет устойчивых повторов'}; "
             f"проблемные темы: {weaknesses or 'нет устойчивых повторов'}."
         )
     else:
         summary = "Пока недостаточно повторяющихся конкретных тем для бизнес-выводов."
-    return {"score": 0, "summary": summary, "recommendations": {"urgent_fix": urgent, "improve": improve, "keep_doing": keep_doing}}
+    return {
+        "score": 0,
+        "summary": summary,
+        "overall_summary": summary,
+        "main_strengths": main_strengths,
+        "main_weaknesses": main_weaknesses,
+        "risk_signals": risk_signals,
+        "recommendations": {"urgent_fix": urgent, "improve": improve, "keep_doing": keep_doing},
+    }
 
 
 @app.get("/api/analytics")
@@ -807,10 +820,23 @@ async def recommendations(business_id: UUID, days: int = 30, refresh: bool = Fal
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
     payload = _build_business_recommendations(rows, industry)
-    result = {"business_id": str(business_id), "period_start": start.isoformat(), "period_end": end.isoformat(), "score": payload["score"], "summary": payload["summary"], "recommendations": payload["recommendations"], "generated_at": datetime.now(timezone.utc).isoformat()}
+    result = {
+        "business_id": str(business_id),
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "score": payload["score"],
+        "summary": payload["summary"],
+        "overall_summary": payload.get("overall_summary", payload["summary"]),
+        "main_strengths": payload.get("main_strengths", []),
+        "main_weaknesses": payload.get("main_weaknesses", []),
+        "risk_signals": payload.get("risk_signals", []),
+        "recommendations": payload["recommendations"],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
     if repository.configured:
         try:
-            return await repository.save_recommendation(business_id, start.isoformat(), end.isoformat(), payload)
+            saved = await repository.save_recommendation(business_id, start.isoformat(), end.isoformat(), payload)
+            return {**result, **saved, "overall_summary": result["overall_summary"], "main_strengths": result["main_strengths"], "main_weaknesses": result["main_weaknesses"], "risk_signals": result["risk_signals"]}
         except RepositoryUnavailable:
             return result
     return result

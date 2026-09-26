@@ -158,7 +158,7 @@ def test_twogis_search_url_is_normalized_to_reviews_tab():
 def test_summary_paraphrases_review_instead_of_copying_it():
     text = "Отличное приложение. Отличный сервис. Разнообразие приятно удивляет."
     summary = summarize_review(text, "positive")
-    assert summary == "Краткая положительная оценка без дополнительных деталей."
+    assert summary == "Краткая положительная оценка без конкретных деталей."
     assert text not in summary
 
 
@@ -180,7 +180,7 @@ def test_summary_captures_grounded_review_topics():
         "Крайне не рекомендую, невозможно зарегистрироваться на дисциплины после оплаты академических кредитов",
         "negative",
     ) == "Жалуется на проблемы с академическими кредитами и невозможность зарегистрироваться на дисциплины после оплаты."
-    assert summarize_review("Классно", "positive") == "Краткая положительная оценка без дополнительных деталей."
+    assert summarize_review("Классно", "positive") == "Краткая положительная оценка без конкретных деталей."
     assert summarize_review("Govno", "negative") == "Brief strongly negative assessment without a specific reason."
     assert summarize_review("❤️", "positive") == "Краткая положительная реакция без текстовых деталей."
 
@@ -190,6 +190,20 @@ def test_summary_captures_dormitory_admissions_complaint():
         "Приемная комиссия в общежитие грубая, ничего нормально не объясняют",
         "negative",
     ) == "Жалуется на грубое общение приемной комиссии общежития и отсутствие понятных объяснений."
+
+
+def test_summary_captures_freeze_support_case():
+    assert summarize_review(
+        "Нечаянно заморозила и разморозила в тот же момент абонемент. Списалось 7 дней заморозки. Сразу же обратилась в службу поддержки.",
+        "negative",
+    ) == "После случайной разморозки у пользователя списались 7 дней заморозки, после чего она обратилась в поддержку."
+
+
+def test_summary_captures_two_main_mixed_issues():
+    assert summarize_review(
+        "Как мог человек с одним посещением выиграть розыгрыш годового абонемента!? И почему в хороших тренажёрных залов время посещение очень неудобное?",
+        "negative",
+    ) == "Сомневается в честности розыгрыша годового абонемента и жалуется на неудобное время посещения хороших залов."
 
 
 def test_generic_llm_summary_is_replaced_with_specific_fallback():

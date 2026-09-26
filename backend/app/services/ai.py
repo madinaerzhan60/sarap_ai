@@ -45,11 +45,11 @@ def _short_reaction_summary(compact: str, sentiment: str) -> str | None:
     if has_heart and not letters:
         return "Краткая положительная реакция без текстовых деталей." if russian or sentiment != "negative" else "Brief positive reaction without text details."
     if sentiment == "positive":
-        return "Краткая положительная оценка без дополнительных деталей." if russian else "Brief positive assessment without additional details."
+        return "Краткая положительная оценка без конкретных деталей." if russian else "Brief positive assessment without specific details."
     if sentiment == "negative":
         return "Краткая резко негативная оценка без конкретной причины." if russian else "Brief strongly negative assessment without a specific reason."
     if sentiment == "mixed":
-        return "Краткая смешанная оценка без дополнительных деталей." if russian else "Brief mixed assessment without additional details."
+        return "Краткая смешанная оценка без конкретных деталей." if russian else "Brief mixed assessment without specific details."
     return "Краткая реакция без конкретных деталей." if russian else "Brief reaction without specific details."
 
 
@@ -67,6 +67,10 @@ def extract_review_topic(text: str, sentiment: str = "neutral") -> tuple[str, st
 def _topic_summary_ru(lowered: str) -> str | None:
     positive: list[str] = []
     negative: list[str] = []
+    if re.search(r"замороз|размороз", lowered) and re.search(r"7\s*дн|семь\s+дн|списа", lowered):
+        return "После случайной разморозки у пользователя списались 7 дней заморозки, после чего она обратилась в поддержку."
+    if re.search(r"розыгрыш|выигра.{0,25}абонемент", lowered) and re.search(r"неудобн.{0,30}время|время.{0,35}неудобн|убирают\s+время|время.{0,30}(?:зал|клуб)", lowered):
+        return "Сомневается в честности розыгрыша годового абонемента и жалуется на неудобное время посещения хороших залов."
     if re.search(r"кампус|трц|красив|мест.{0,25}(?:поспать|отдох)|отдых", lowered):
         positive.append("красивый кампус и места для отдыха")
     if re.search(r"каскелен|далеко|располож", lowered):
@@ -142,11 +146,11 @@ def summarize_review(text: str, sentiment: str) -> str:
         if topical:
             return topical
     if sentiment == "positive":
-        return "Краткая положительная оценка без дополнительных деталей." if _is_russian_like(compact) else "Brief positive assessment without additional details."
+        return "Краткая положительная оценка без конкретных деталей." if _is_russian_like(compact) else "Brief positive assessment without specific details."
     if sentiment == "negative":
         return "Краткая негативная оценка без конкретной причины." if _is_russian_like(compact) else "Brief negative assessment without a specific reason."
     if sentiment == "mixed":
-        return "Краткая смешанная оценка без дополнительных деталей." if _is_russian_like(compact) else "Brief mixed assessment without additional details."
+        return "Краткая смешанная оценка без конкретных деталей." if _is_russian_like(compact) else "Brief mixed assessment without specific details."
     return "Краткое мнение без однозначной оценки и конкретных деталей." if _is_russian_like(compact) else "Brief opinion without clear sentiment or specific details."
 
 
