@@ -699,6 +699,43 @@ TOPIC_ACTIONS_RU = {
     "scam_fairness": "Разобрать спорные кейсы на прозрачность, зафиксировать правила и дать понятное объяснение участникам.",
 }
 
+SECTION_ACTIONS_RU = {
+    "urgent_fix": {
+        "staff_communication": "Срочно разобрать жалобы на коммуникацию, проверить работу ответственных сотрудников и закрепить правила ответа студентам.",
+        "dormitory": "Срочно проверить процесс обращений по общежитию, разобрать конфликтные кейсы и назначить ответственного за понятные объяснения.",
+        "transport_access": "Срочно проверить повторяющиеся жалобы на дорогу и доступность кампуса, затем обновить маршрутные инструкции.",
+        "food_canteen": "Срочно проверить повторяющиеся жалобы на столовую и качество еды, затем устранить подтвержденные проблемы.",
+        "academic_registration": "Срочно разобрать сбои регистрации, оплаты и портала, затем дать студентам понятный порядок решения.",
+        "teaching_quality": "Срочно передать повторяющиеся жалобы академической команде и проверить конкретные занятия или преподавательские практики.",
+        "support_response": "Срочно проверить неотвеченные обращения, назначить владельца процесса и ввести контроль сроков ответа.",
+        "pricing_money": "Срочно проверить жалобы на оплату, возвраты или финансовые правила и дать прозрачные объяснения.",
+        "scam_fairness": "Срочно разобрать спорные кейсы на прозрачность и зафиксировать понятные правила для участников.",
+    },
+    "improve": {
+        "staff_communication": "Улучшить стандарты общения сотрудников и регулярно разбирать повторяющиеся жалобы.",
+        "dormitory": "Улучшить инструкции и ответы по вопросам общежития, чтобы студентам было понятно, куда обращаться.",
+        "transport_access": "Улучшить коммуникацию о маршрутах, расписании и вариантах дороги до кампуса.",
+        "food_canteen": "Улучшить контроль качества еды, ассортимента и обратной связи по столовой.",
+        "academic_registration": "Улучшить процесс регистрации и объяснение шагов при сбоях портала или оплаты.",
+        "teaching_quality": "Улучшить сбор обратной связи по занятиям и передавать повторяющиеся проблемы академической команде.",
+        "support_response": "Улучшить скорость и полноту ответов поддержки по повторяющимся обращениям.",
+        "pricing_money": "Улучшить объяснение оплаты, стоимости и правил возврата, где студенты видят проблему.",
+        "scam_fairness": "Улучшить прозрачность правил и коммуникацию вокруг спорных ситуаций.",
+    },
+    "keep_doing": {
+        "staff_communication": "Продолжать поддерживать сильные практики общения сотрудников, которые студенты отмечают положительно.",
+        "dormitory": "Сохранять элементы работы общежития, которые студенты оценивают положительно.",
+        "transport_access": "Продолжать поддерживать удобные транспортные решения и понятную навигацию, которые получают положительные отзывы.",
+        "food_canteen": "Сохранять качество еды и столовой, которое студенты хвалят.",
+        "academic_registration": "Продолжать поддерживать понятные и удобные элементы академической регистрации.",
+        "teaching_quality": "Сохранять сильные практики преподавания и занятий, которые студенты хвалят.",
+        "campus_atmosphere": "Продолжать развивать кампус, места отдыха и студенческую атмосферу, которые получают положительные отзывы.",
+        "support_response": "Сохранять быстрые и полезные ответы поддержки, которые отмечают положительно.",
+        "pricing_money": "Сохранять понятные и выгодные финансовые условия, которые студенты оценивают положительно.",
+        "scam_fairness": "Сохранять прозрачные правила и честную коммуникацию, которые укрепляют доверие.",
+    },
+}
+
 
 def _topic_title(topic: str) -> str:
     return TOPIC_TITLES_RU.get(topic, topic.replace("_", " "))
@@ -708,57 +745,107 @@ def _recommendation(topic: str, title: str, evidence: str, action: str, count: i
     return {"title": title, "evidence": evidence, "action": action, "count": count, "topic": topic}
 
 
+def _compact_evidence(text: str, limit: int = 150) -> str:
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit].rsplit(" ", 1)[0].rstrip(".,;:") + "..."
+
+
+def _evidence_for_bucket(topic: str, sentiment: str, mentions: list[ProcessedMention]) -> str | None:
+    for item in mentions:
+        mention_topic, _ = extract_review_topic(item.mention.text, sentiment)
+        if mention_topic == topic:
+            return _compact_evidence(item.mention.text)
+    return None
+
+
+def _action_for(section: str, topic: str) -> str:
+    return SECTION_ACTIONS_RU[section].get(topic, {
+        "urgent_fix": "Срочно разобрать повторяющиеся жалобы и назначить ответственного за исправление.",
+        "improve": "Улучшить процесс по повторяющейся проблеме и отслеживать результат.",
+        "keep_doing": "Продолжать поддерживать эту сильную сторону и сохранять текущие практики.",
+    }[section])
+
+
+def _valid_recommendation(section: str, topic: str, sentiment: str, mentions: list[ProcessedMention], evidence: str | None, action: str, count: int) -> bool:
+    if topic in {"overall", "service", "experience", "low_signal"} or not evidence:
+        return False
+    mention_ids = {str(item.mention.id) for item in mentions}
+    if count != len(mention_ids) or count < 2:
+        return False
+    if section == "urgent_fix" and not all(item.analysis.sentiment == "negative" and (item.risk.score >= 60 or item.analysis.severity in {"high", "critical"}) for item in mentions):
+        return False
+    if section == "improve" and not all(item.analysis.sentiment in {"negative", "mixed"} for item in mentions):
+        return False
+    if section == "keep_doing" and not all(item.analysis.sentiment == "positive" for item in mentions):
+        return False
+    if extract_review_topic(evidence, sentiment)[0] != topic:
+        return False
+    lowered_action = action.casefold()
+    if section == "keep_doing":
+        return bool(re.search(r"сохраня|продолж|поддерж", lowered_action)) and not bool(re.search(r"жалоб|исправ|разобрать|проверить|устран", lowered_action))
+    if section == "urgent_fix":
+        return bool(re.search(r"срочно|разобрать|проверить|устран|назнач", lowered_action))
+    return bool(re.search(r"улучш|обнов|передав|контрол", lowered_action))
+
+
 def _build_business_recommendations(rows: list[ProcessedMention], industry: str) -> dict[str, Any]:
-    positive = Counter()
-    negative = Counter()
-    high_risk = Counter()
-    examples: dict[str, str] = {}
+    buckets: dict[str, dict[str, dict[str, ProcessedMention]]] = {
+        "positive": {},
+        "negative": {},
+        "mixed": {},
+        "urgent": {},
+    }
     for item in rows:
         topic, _ = extract_review_topic(item.mention.text, item.analysis.sentiment)
-        if topic == "low_signal":
+        if topic in {"low_signal", "overall", "service", "experience"}:
             continue
-        examples.setdefault(topic, item.analysis.summary or item.mention.text[:120])
+        mention_id = str(item.mention.id)
         if item.analysis.sentiment == "positive":
-            positive[topic] += 1
+            buckets["positive"].setdefault(topic, {})[mention_id] = item
         elif item.analysis.sentiment in {"negative", "mixed"}:
-            negative[topic] += 1
-            if item.risk.score >= 60 or item.analysis.severity in {"high", "critical"}:
-                high_risk[topic] += 1
+            buckets[item.analysis.sentiment].setdefault(topic, {})[mention_id] = item
+            if item.analysis.sentiment == "negative" and (item.risk.score >= 60 or item.analysis.severity in {"high", "critical"}):
+                buckets["urgent"].setdefault(topic, {})[mention_id] = item
 
-    urgent = [
-        _recommendation(
-            topic,
-            f"Срочно исправить: {_topic_title(topic)}",
-            f"{count} повторяющихся риск-сигнала: {examples.get(topic, '').rstrip('.')}.",
-            TOPIC_ACTIONS_RU.get(topic, "Разобрать повторяющиеся жалобы и назначить ответственного за исправление."),
-            count,
-        )
-        for topic, count in high_risk.most_common(3)
-        if count >= 2
-    ]
+    positive = Counter({topic: len(items) for topic, items in buckets["positive"].items()})
+    negative = Counter({topic: len(items) for topic, items in buckets["negative"].items()})
+    negative.update({topic: len(items) for topic, items in buckets["mixed"].items()})
+    high_risk = Counter({topic: len(items) for topic, items in buckets["urgent"].items()})
+
+    def build_item(section: str, topic: str, sentiment: str, items_by_id: dict[str, ProcessedMention]) -> dict[str, Any] | None:
+        mentions = list(items_by_id.values())
+        count = len(items_by_id)
+        evidence = _evidence_for_bucket(topic, sentiment, mentions)
+        action = _action_for(section, topic)
+        if not _valid_recommendation(section, topic, sentiment, mentions, evidence, action, count):
+            return None
+        titles = {
+            "urgent_fix": f"Срочно исправить: {_topic_title(topic)}",
+            "improve": f"Улучшить: {_topic_title(topic)}",
+            "keep_doing": f"Сохранять: {_topic_title(topic)}",
+        }
+        evidence_prefix = {
+            "urgent_fix": f"{count} риск-сигнала по теме: ",
+            "improve": f"{count} негативных/смешанных упоминания по теме: ",
+            "keep_doing": f"{count} положительных упоминания по теме: ",
+        }
+        return _recommendation(topic, titles[section], f"{evidence_prefix[section]}{evidence}", action, count)
+
+    urgent = [item for topic, _ in high_risk.most_common(3) if (item := build_item("urgent_fix", topic, "negative", buckets["urgent"][topic]))]
     urgent_topics = {topic for topic, count in high_risk.items() if count >= 2}
-    improve = [
-        _recommendation(
-            topic,
-            f"Улучшить: {_topic_title(topic)}",
-            f"{count} негативных упоминания: {examples.get(topic, '').rstrip('.')}.",
-            TOPIC_ACTIONS_RU.get(topic, "Проверить повторяющуюся проблему и подготовить понятный план улучшения."),
-            count,
-        )
-        for topic, count in negative.most_common(4)
-        if count >= 2 and topic not in urgent_topics
-    ][:3]
-    keep_doing = [
-        _recommendation(
-            topic,
-            f"Сохранять: {_topic_title(topic)}",
-            f"{count} положительных упоминания: {examples.get(topic, '').rstrip('.')}.",
-            TOPIC_ACTIONS_RU.get(topic, "Сохранить практики, которые клиенты повторно отмечают как сильную сторону."),
-            count,
-        )
-        for topic, count in positive.most_common(3)
-        if count >= 2
-    ]
+    improve = []
+    for topic, _ in negative.most_common(4):
+        if topic in urgent_topics:
+            continue
+        merged = {**buckets["negative"].get(topic, {}), **buckets["mixed"].get(topic, {})}
+        item = build_item("improve", topic, "negative", merged)
+        if item:
+            improve.append(item)
+        if len(improve) == 3:
+            break
+    keep_doing = [item for topic, _ in positive.most_common(3) if (item := build_item("keep_doing", topic, "positive", buckets["positive"][topic]))]
 
     main_strengths = [{"topic": topic, "title": _topic_title(topic), "count": count} for topic, count in positive.most_common(5) if count >= 2]
     main_weaknesses = [{"topic": topic, "title": _topic_title(topic), "count": count} for topic, count in negative.most_common(5) if count >= 2]
