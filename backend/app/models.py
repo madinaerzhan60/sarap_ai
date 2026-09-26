@@ -72,6 +72,10 @@ class NormalizedMention(RawItem):
     collected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     language: str | None = None
     content_hash: str
+    dedupe_key: str = ""
+    is_duplicate: bool = False
+    duplicate_group_id: str | None = None
+    canonical_mention_id: str | None = None
     reviewed: bool = False
     content_type: ContentType = ContentType.review
     author_type: AuthorType = AuthorType.unknown

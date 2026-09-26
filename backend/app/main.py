@@ -29,6 +29,7 @@ from app.connectors.search import DiscoveryNotConfigured, DiscoveryService, cano
 from app.models import DiscoveryRequest, ExtractedReview, ManualImportRequest, MentionType, MentionUpdate, ProcessedMention, RawItem, ReplyDraftRequest, ReplyStatus, ReviewExtractionRequest, ReviewImportRequest, RiskResult, SourceCreate, SourceOAuthCredential, SourceUpdate
 from app.services.llm import analyze_with_cascade, generate_reply_draft
 from app.services.normalization import normalize
+from app.services.dedupe import find_near_duplicate_group
 from app.services.review_extraction import ReviewExtractionUnavailable, extract_reviews, review_external_id
 from app.services.risk import calculate
 from app.services.topics import top_topics
@@ -53,7 +54,7 @@ logger = logging.getLogger("sarap.discovery")
 
 
 def _visible_product_mentions(items: list[ProcessedMention]) -> list[ProcessedMention]:
-    """Hide legacy rows created when the old YouTube connector stored video titles."""
+    """Hide legacy rows and non-canonical duplicate mentions from analytics."""
     return [
         item for item in items
         if not (
@@ -62,6 +63,7 @@ def _visible_product_mentions(items: list[ProcessedMention]) -> list[ProcessedMe
             and item.mention.metadata.get("content_type") == "video"
             and item.mention.metadata.get("collection_method") == "public_page"
         )
+        and not getattr(item.mention, "is_duplicate", False)
     ]
 
 
@@ -82,19 +84,19 @@ async def _stored_source_count(business_id: UUID, source_name: str) -> int:
 
 
 async def _should_run_history_sync(source: dict, business_id: UUID, explicit_backfill: bool) -> tuple[bool, int]:
+    stored_count = await _stored_source_count(business_id, str(source.get("source", "")))
     if explicit_backfill:
-        return True, await _stored_source_count(business_id, str(source.get("source", "")))
+        return True, stored_count
     source_name = str(source.get("source", ""))
-    threshold = _history_threshold(source_name)
-    if threshold <= 0:
-        return False, await _stored_source_count(business_id, source_name)
     provider = os.getenv("TWOGIS_PROVIDER", "direct").strip().lower()
-    if source_name.casefold().strip() not in {"2gis", "2gis maps"} or provider != "zenrows":
-        return False, await _stored_source_count(business_id, source_name)
-    stored_count = await _stored_source_count(business_id, source_name)
-    if source.get("last_seen_published_at") and stored_count > 0:
-        return False, stored_count
-    return stored_count < threshold, stored_count
+    if source_name.casefold().strip() in {"2gis", "2gis maps"} and provider in {"zenrows", "brightdata"}:
+        threshold = _history_threshold(source_name)
+        if source.get("last_seen_published_at"):
+            return False, stored_count
+        if source.get("last_seen_item_id") and stored_count >= threshold:
+            return False, stored_count
+        return True, stored_count
+    return False, stored_count
 
 
 async def process_item(business_id: UUID, item: RawItem) -> ProcessedMention:
@@ -102,19 +104,40 @@ async def process_item(business_id: UUID, item: RawItem) -> ProcessedMention:
     author_key = str(mention.metadata.get("author_key") or "")
     if author_key and ((repository.configured and await repository.author_is_ignored(business_id, mention.source, author_key)) or (business_id, mention.source, author_key) in ignored_authors):
         mention = mention.model_copy(update={"include_in_analysis": False})
+
+    # Strict deduplication check (by dedupe_key or content_hash)
     if repository.configured:
-        previous = await repository.find_by_hash(business_id, mention.content_hash)
+        previous = await repository.find_by_dedupe_key(business_id, mention.dedupe_key) if getattr(mention, "dedupe_key", None) else None
+        if not previous:
+            previous = await repository.find_by_hash(business_id, mention.content_hash)
         if previous:
             return previous.model_copy(update={"duplicate": True})
-    elif mention.content_hash in seen_hashes:
-        previous = next(x for x in processed if x.mention.content_hash == mention.content_hash)
-        return previous.model_copy(update={"duplicate": True})
+    elif (getattr(mention, "dedupe_key", None) and mention.dedupe_key in seen_hashes) or mention.content_hash in seen_hashes:
+        previous = next((x for x in processed if (getattr(x.mention, "dedupe_key", None) and x.mention.dedupe_key == mention.dedupe_key) or x.mention.content_hash == mention.content_hash), None)
+        if previous:
+            return previous.model_copy(update={"duplicate": True})
+
+    # Near-duplicate detection
+    if repository.configured:
+        candidates = await repository.find_canonical_candidates(business_id)
+        near_match = find_near_duplicate_group(mention.text, candidates)
+        if near_match:
+            group_id = near_match.get("duplicate_group_id") or near_match["id"]
+            canonical_id = near_match.get("canonical_mention_id") or near_match["id"]
+            mention = mention.model_copy(update={
+                "is_duplicate": True,
+                "duplicate_group_id": UUID(str(group_id)) if isinstance(group_id, str) else group_id,
+                "canonical_mention_id": UUID(str(canonical_id)) if isinstance(canonical_id, str) else canonical_id,
+            })
+
     analysis = await analyze_with_cascade(mention.text, mention.rating)
     risk = calculate(mention, analysis) if mention.include_in_analysis else RiskResult(score=0, level="Excluded", reasons=["Excluded from customer reputation analysis"])
     result = ProcessedMention(mention=mention, analysis=analysis, risk=risk, alert_created=mention.include_in_analysis and risk.score >= 60)
     if repository.configured:
         result = await repository.persist_processed(result, "groq-gemini-cascade")
     else:
+        if getattr(mention, "dedupe_key", None):
+            seen_hashes.add(mention.dedupe_key)
         seen_hashes.add(mention.content_hash)
         processed.append(result)
     if result.alert_created:
@@ -583,8 +606,7 @@ async def poll_source(source_id: str, backfill: bool = False, context: AuthConte
             stored_after = await repository.count_mentions(business_id, str(source["source"]))
         except RepositoryUnavailable:
             stored_after = stored_before + new_count
-    threshold = _history_threshold(str(source.get("source", "")))
-    historical_complete = not effective_backfill or bool(collection.metadata.get("history_complete")) or (threshold > 0 and stored_after >= threshold)
+    historical_complete = not effective_backfill or bool(collection.metadata.get("history_complete"))
     if effective_backfill:
         collection.metadata["historical_complete"] = historical_complete
         collection.metadata["stored_before_sync"] = stored_before

@@ -126,7 +126,7 @@ def extract_map_items(
         )
 
         stable_hash = hashlib.sha256(
-            f"{profile.source}|{author}|{date_raw or ''}|{text}".encode("utf-8")
+            f"{profile.source}|{author}|{text}".encode("utf-8")
         ).hexdigest()[:24]
 
         external_id = card.get("data-review-id") or f"{profile.source}-{stable_hash}"

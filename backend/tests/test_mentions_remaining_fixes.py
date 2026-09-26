@@ -48,5 +48,6 @@ def test_paid_sociavault_is_disabled_without_global_opt_in(monkeypatch):
 
 def test_2gis_requires_external_worker(monkeypatch):
     monkeypatch.delenv("COLLECTOR_WORKER_URL", raising=False)
+    monkeypatch.setenv("TWOGIS_PROVIDER", "worker")
     with pytest.raises(Exception, match="COLLECTOR_WORKER_URL"):
         CollectorRegistry().resolve({"source": "2gis", "source_url": "https://2gis.kz/almaty/firm/123/tab/reviews", "business_id": str(uuid4())})

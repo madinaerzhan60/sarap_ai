@@ -108,9 +108,16 @@ create table public.mentions (
   collected_at timestamptz not null default now(),
   language text,
   content_hash text not null,
+  dedupe_key text,
+  is_duplicate boolean not null default false,
+  duplicate_group_id uuid,
+  canonical_mention_id uuid references public.mentions(id) on delete set null,
   metadata jsonb not null default '{}',
   unique (business_id, source, external_id, content_hash)
 );
+
+create unique index if not exists idx_mentions_dedupe_key_unique on public.mentions (business_id, dedupe_key) where dedupe_key is not null;
+create index if not exists idx_mentions_is_duplicate on public.mentions (business_id, is_duplicate);
 
 create table public.mention_revisions (
   id uuid primary key default gen_random_uuid(),

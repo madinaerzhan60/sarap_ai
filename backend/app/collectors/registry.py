@@ -177,7 +177,13 @@ class CollectorRegistry:
             if provider_key == "direct":
                 return source_type, TwoGisPlaywrightConnector(page_url, business_id)
 
-            return source_type, MapFallbackConnector("2gis", page_url, business_id)
+            if provider_key == "worker":
+                if not use_worker:
+                    raise ConnectorUnavailable("2GIS worker collection requires COLLECTOR_WORKER_URL")
+                from app.connectors.worker import ExternalWorkerConnector
+                return source_type, ExternalWorkerConnector("2gis", page_url)
+
+            return source_type, TwoGisPlaywrightConnector(page_url, business_id)
 
         if source_type == SourceType.YANDEX_MAPS:
             provider_key = os.getenv("YANDEX_PROVIDER", "direct").strip().lower()

@@ -55,6 +55,45 @@ class SupabaseRepository:
         # failed. Returning None lets the pipeline repair that partial record.
         return await self.get_processed(mention_id) if analysis_rows and risk_rows else None
 
+    async def find_by_dedupe_key(self, business_id: UUID, dedupe_key: str) -> ProcessedMention | None:
+        """Strict duplicate lookup by stable dedupe_key."""
+        rows = await self.request("GET", "mentions", params={
+            "select": "id", "business_id": f"eq.{business_id}",
+            "dedupe_key": f"eq.{dedupe_key}", "limit": "1",
+        })
+        if not rows:
+            return None
+        mention_id = rows[0]["id"]
+        analysis_rows, risk_rows = await __import__("asyncio").gather(
+            self.request("GET", "ai_analysis", params={"select": "mention_id", "mention_id": f"eq.{mention_id}", "limit": "1"}),
+            self.request("GET", "risk_scores", params={"select": "mention_id", "mention_id": f"eq.{mention_id}", "limit": "1"}),
+        )
+        return await self.get_processed(mention_id) if analysis_rows and risk_rows else None
+
+    async def find_canonical_candidates(self, business_id: UUID, limit: int = 200) -> list[dict[str, Any]]:
+        """Return existing non-duplicate mentions for near-duplicate comparison."""
+        rows = await self.request("GET", "mentions", params={
+            "select": "id,text,source,author_name,published_at,duplicate_group_id,canonical_mention_id",
+            "business_id": f"eq.{business_id}",
+            "is_duplicate": "eq.false",
+            "order": "collected_at.desc",
+            "limit": str(limit),
+        })
+        return rows or []
+
+    async def mark_as_near_duplicate(self, mention_id: str, canonical_id: str, group_id: str) -> None:
+        """Mark a mention as a near-duplicate of a canonical mention."""
+        await self.request("PATCH", "mentions", params={"id": f"eq.{mention_id}"}, json={
+            "is_duplicate": True,
+            "canonical_mention_id": canonical_id,
+            "duplicate_group_id": group_id,
+        })
+        # Ensure canonical also has the group_id
+        await self.request("PATCH", "mentions", params={
+            "id": f"eq.{canonical_id}",
+            "duplicate_group_id": "is.null",
+        }, json={"duplicate_group_id": group_id})
+
     async def external_item_is_complete(self, business_id: UUID, source: str, external_id: str) -> bool:
         rows = await self.request("GET", "mentions", params={
             "select": "id", "business_id": f"eq.{business_id}", "source": f"ilike.{source}",
@@ -97,7 +136,9 @@ class SupabaseRepository:
                 "external_url": m.external_url, "author_name": m.author_name, "text": m.text,
                 "rating": m.rating, "published_at": m.published_at.isoformat() if m.published_at else None,
                 "collected_at": m.collected_at.isoformat(), "language": result.analysis.language,
-                "content_hash": m.content_hash, "metadata": m.metadata,
+                "content_hash": m.content_hash, "dedupe_key": m.dedupe_key,
+                "is_duplicate": m.is_duplicate, "duplicate_group_id": m.duplicate_group_id,
+                "canonical_mention_id": m.canonical_mention_id, "metadata": m.metadata,
                 "content_type": m.content_type.value, "author_type": m.author_type.value,
                 "include_in_analysis": m.include_in_analysis, "reply_draft": m.reply_draft,
                 "reply_generated_at": m.reply_generated_at.isoformat() if m.reply_generated_at else None,

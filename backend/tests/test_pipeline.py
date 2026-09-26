@@ -175,7 +175,9 @@ def test_twogis_source_rejects_non_twogis_domain():
         TwoGisPlaywrightConnector("https://example.com/almaty/firm/70000001035980354")
 
 
-def test_instagram_source_uses_fallback_connector():
+def test_instagram_source_uses_fallback_connector(monkeypatch):
+    monkeypatch.delenv("COLLECTOR_WORKER_URL", raising=False)
+    monkeypatch.setenv("INSTAGRAM_PROVIDER", "fallback")
     connector = connector_for({"source": "Instagram", "collection_mode": "auto", "source_url": "https://www.instagram.com/p/example/"})
     assert isinstance(connector, InstagramFallbackConnector)
 
@@ -226,7 +228,8 @@ def test_source_type_normalization(name, url, expected):
     assert normalize_source_type(name, url) == expected
 
 
-def test_google_maps_never_uses_generic_static_review_connector():
+def test_google_maps_never_uses_generic_static_review_connector(monkeypatch):
+    monkeypatch.delenv("COLLECTOR_WORKER_URL", raising=False)
     source_type, connector = collector_registry.resolve({
         "source": "Google Business", "collection_mode": "auto",
         "source_url": "https://www.google.com/maps/place/example",

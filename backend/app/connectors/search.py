@@ -171,6 +171,13 @@ class FreeSearchProvider(SearchProvider):
             jobs.extend(("tavily", query, TavilyProvider()) for query in queries[:8])
         elif os.getenv("BRAVE_SEARCH_API_KEY", "").strip():
             jobs.extend(("brave", query, BraveProvider()) for query in queries[:8])
+        elif (
+            os.getenv("WEB_SEARCH_PROVIDER", "").strip().lower() == "free"
+            or os.getenv("ENABLE_FREE_DISCOVERY", "false").casefold() in {"true", "1", "yes"}
+        ):
+            for provider in self.providers:
+                p_name = provider.__class__.__name__.lower()
+                jobs.extend((p_name, query, provider) for query in queries[:4])
         else:
             raise DiscoveryNotConfigured("Web discovery is not configured yet.")
 
