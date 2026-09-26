@@ -41,7 +41,7 @@ class ApifyTwoGisConnector(BaseConnector):
         self.page_url = normalize_twogis_business_url(page_url)
         self.business_id = business_id
 
-    async def fetch_latest(self, last_seen_item_id: str | None = None, *, backfill: bool = False) -> list[RawItem]:
+    async def fetch_latest(self, last_seen_item_id: str | None = None, backfill: bool = False) -> list[RawItem]:
         token = (os.getenv("APIFY_API_TOKEN") or os.getenv("APIFY_TOKEN") or "").strip()
         if not token:
             raise ProviderNotConfigured("APIFY_API_TOKEN or APIFY_TOKEN is empty")

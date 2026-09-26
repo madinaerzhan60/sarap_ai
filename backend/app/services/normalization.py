@@ -18,25 +18,29 @@ def _normalized_casefold(text: str) -> str:
 
 
 def content_hash(item: RawItem) -> str:
-    """Stable content hash for strict duplicate detection.
-
-    Uses source + normalized text only.  Does NOT include external_id because
-    external_id may contain volatile relative-date text for fallback scraped
-    items (e.g. "3 дня назад" changes to "4 дня назад" the next day).
-    """
-    payload = f"{item.source.lower()}|{_normalized_casefold(item.text)}"
+    """Stable content hash for strict duplicate detection."""
+    ext_id = str(item.external_id or "").strip()
+    if ext_id:
+        payload = f"{item.source.lower()}|{ext_id}"
+    else:
+        payload = f"{item.source.lower()}|{_normalized_casefold(item.text)}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def dedupe_key(item: RawItem) -> str:
     """Stable fingerprint for strict deduplication within a source.
 
-    Combines source + author (if available) + normalized text.
-    Independent of external_id and date labels.
+    Prioritizes stable external_id when available, preventing false duplicate merges
+    of short reviews (e.g. '.', '❤️', 'Топ') from different users.
+    Falls back to source + author + normalized text when external_id is absent.
     """
-    author = _normalized_casefold(item.author_name or "")
-    text = _normalized_casefold(item.text)
-    payload = f"{item.source.lower()}|{author}|{text}"
+    ext_id = str(item.external_id or "").strip()
+    if ext_id:
+        payload = f"{item.source.lower()}|{ext_id}"
+    else:
+        author = _normalized_casefold(item.author_name or "")
+        text = _normalized_casefold(item.text)
+        payload = f"{item.source.lower()}|{author}|{text}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

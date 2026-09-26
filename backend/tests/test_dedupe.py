@@ -27,7 +27,7 @@ def test_normalize_text_and_dedupe_key():
     item2 = RawItem(
         source="2gis",
         source_type=MentionType.review,
-        external_id="rev-1-different",
+        external_id="rev-1",
         author_name="Алиса ",
         text=text2,
         rating=5.0,
@@ -179,5 +179,39 @@ def test_web_search_provider_free_does_not_raise(monkeypatch):
 
         results, stats = await provider.search_many(["SDU University"])
         assert isinstance(results, list)
+
+    asyncio.run(run())
+
+
+def test_short_identical_reviews_from_different_external_ids_are_preserved():
+    async def run():
+        biz_id = uuid4()
+        rev_a = RawItem(
+            source="2gis",
+            source_type=MentionType.review,
+            external_id="111",
+            author_name="User A",
+            text="❤️",
+            rating=5.0,
+        )
+        rev_b = RawItem(
+            source="2gis",
+            source_type=MentionType.review,
+            external_id="222",
+            author_name="User B",
+            text="❤️",
+            rating=5.0,
+        )
+
+        res_a = await process_item(biz_id, rev_a)
+        res_b = await process_item(biz_id, rev_b)
+
+        assert res_a.duplicate is False or res_a.duplicate is None
+        assert res_b.duplicate is False or res_b.duplicate is None
+        assert res_a.mention.dedupe_key != res_b.mention.dedupe_key
+
+        # Re-ingestion of same review A must be detected as duplicate
+        res_a_again = await process_item(biz_id, rev_a)
+        assert res_a_again.duplicate is True
 
     asyncio.run(run())
