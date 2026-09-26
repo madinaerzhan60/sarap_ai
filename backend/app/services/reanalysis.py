@@ -107,10 +107,6 @@ def _mention_from_row(row: dict[str, Any], analysis: Any) -> NormalizedMention:
 
 async def _apply_update(repository: ReanalysisRepository, mention: NormalizedMention, result: ProcessedMention) -> None:
     mention_id = str(mention.id)
-    await repository.request("PATCH", "mentions", params={"id": f"eq.{mention_id}"}, json={
-        "language": result.analysis.language,
-        "metadata": {**mention.metadata, "analysis_version": ANALYSIS_VERSION},
-    })
     await repository.request("POST", "ai_analysis", params={"on_conflict": "mention_id"}, json={
         "mention_id": mention_id,
         "language": result.analysis.language,
@@ -134,6 +130,17 @@ async def _apply_update(repository: ReanalysisRepository, mention: NormalizedMen
         "level": result.risk.level,
         "reasons": result.risk.reasons,
     }, prefer="resolution=merge-duplicates")
+    await repository.request("PATCH", "mentions", params={"id": f"eq.{mention_id}"}, json={
+        "language": result.analysis.language,
+        "metadata": {**mention.metadata, "analysis_version": ANALYSIS_VERSION},
+    })
+
+
+async def _invalidate_recommendation_cache(repository: ReanalysisRepository, business_id: UUID) -> None:
+    try:
+        await repository.request("DELETE", "business_recommendations", params={"business_id": f"eq.{business_id}"})
+    except Exception:
+        return
 
 
 async def reanalyze_mentions(
@@ -179,7 +186,7 @@ async def reanalyze_mentions(
         offset += len(batch)
 
     if not dry_run and progress.updated:
-        await repository.request("DELETE", "business_recommendations", params={"business_id": f"eq.{business_id}"})
+        await _invalidate_recommendation_cache(repository, business_id)
     return progress
 
 

@@ -20,6 +20,9 @@ class FakeRepository:
         self.recommendations_deleted = False
         self.mention_posts = 0
         self.fail_patch_ids: set[str] = set()
+        self.fail_ai_ids: set[str] = set()
+        self.missing_recommendations_table = False
+        self.ai_post_count = 0
 
     async def request(self, method: str, path: str, *, params: dict[str, str] | None = None, json=None, prefer: str | None = None):
         self.calls.append((method, path, params, deepcopy(json)))
@@ -50,6 +53,9 @@ class FakeRepository:
             self.mention_posts += 1
             return []
         if method == "POST" and path == "ai_analysis":
+            self.ai_post_count += 1
+            if str(json["mention_id"]) in self.fail_ai_ids:
+                raise RuntimeError("simulated ai_analysis failure")
             self.analyses[str(json["mention_id"])] = deepcopy(json)
             return []
         if method == "DELETE" and path == "mention_aspects":
@@ -63,6 +69,8 @@ class FakeRepository:
             self.risks[str(json["mention_id"])] = deepcopy(json)
             return []
         if method == "DELETE" and path == "business_recommendations":
+            if self.missing_recommendations_table:
+                raise RuntimeError("relation business_recommendations does not exist")
             self.recommendations_deleted = True
             return []
         raise AssertionError(f"Unexpected request: {method} {path} {params} {json}")
@@ -122,6 +130,7 @@ def test_reanalysis_updates_existing_row_without_duplication_and_preserves_field
 
     assert progress.updated == 1
     assert repository.mention_posts == 0
+    assert repository.ai_post_count == 1
     updated = repository.mentions[row["id"]]
     for field in ("text", "author_name", "rating", "published_at", "external_id", "source", "dedupe_key", "canonical_mention_id", "duplicate_group_id", "include_in_analysis"):
         assert updated[field] == original[field]
@@ -131,6 +140,19 @@ def test_reanalysis_updates_existing_row_without_duplication_and_preserves_field
     assert repository.analyses[row["id"]]["sentiment"] == "negative"
     assert repository.risks[row["id"]]["score"] >= 60
     assert repository.aspects[row["id"]]
+
+
+def test_reanalysis_overwrites_existing_ai_analysis_instead_of_duplication():
+    business_id = uuid4()
+    row = mention_row(business_id=str(business_id))
+    repository = FakeRepository([row], {row["id"]: generic_analysis(row["id"])})
+
+    progress = asyncio.run(reanalyze_mentions(repository, business_id=business_id, dry_run=False))
+
+    assert progress.updated == 1
+    assert len(repository.analyses) == 1
+    assert repository.analyses[row["id"]]["model"] == f"local-v{ANALYSIS_VERSION}"
+    assert repository.analyses[row["id"]]["summary"] != "Пользователь положительно оценивает сервис."
 
 
 def test_reanalysis_dry_run_reports_without_mutation():
@@ -158,6 +180,47 @@ def test_reanalysis_preserves_ignored_state_and_invalidates_recommendations():
     assert progress.updated == 1
     assert repository.mentions[row["id"]]["include_in_analysis"] is False
     assert repository.recommendations_deleted is True
+
+
+def test_reanalysis_marks_version_only_after_successful_persistence():
+    business_id = uuid4()
+    row = mention_row(business_id=str(business_id), metadata={"source_connection_id": "source-1"})
+    repository = FakeRepository([row], {row["id"]: generic_analysis(row["id"])})
+
+    progress = asyncio.run(reanalyze_mentions(repository, business_id=business_id, dry_run=False))
+
+    call_names = [(method, path) for method, path, _, _ in repository.calls if path in {"ai_analysis", "mention_aspects", "risk_scores", "mentions"}]
+    assert progress.updated == 1
+    assert call_names.index(("POST", "ai_analysis")) < call_names.index(("PATCH", "mentions"))
+    assert call_names.index(("POST", "risk_scores")) < call_names.index(("PATCH", "mentions"))
+    assert repository.mentions[row["id"]]["metadata"]["analysis_version"] == ANALYSIS_VERSION
+
+
+def test_reanalysis_failed_ai_update_leaves_old_analysis_version():
+    business_id = uuid4()
+    row = mention_row(business_id=str(business_id), metadata={"analysis_version": 1, "source_connection_id": "source-1"})
+    repository = FakeRepository([row], {row["id"]: generic_analysis(row["id"])})
+    repository.fail_ai_ids.add(row["id"])
+
+    progress = asyncio.run(reanalyze_mentions(repository, business_id=business_id, dry_run=False))
+
+    assert progress.failed == 1
+    assert progress.updated == 0
+    assert repository.mentions[row["id"]]["metadata"]["analysis_version"] == 1
+    assert repository.analyses[row["id"]]["summary"] == "Пользователь положительно оценивает сервис."
+
+
+def test_reanalysis_missing_recommendation_cache_table_does_not_crash_job():
+    business_id = uuid4()
+    row = mention_row(business_id=str(business_id))
+    repository = FakeRepository([row], {row["id"]: generic_analysis(row["id"])})
+    repository.missing_recommendations_table = True
+
+    progress = asyncio.run(reanalyze_mentions(repository, business_id=business_id, dry_run=False))
+
+    assert progress.updated == 1
+    assert progress.failed == 0
+    assert repository.mentions[row["id"]]["metadata"]["analysis_version"] == ANALYSIS_VERSION
 
 
 def test_reanalysis_second_stale_only_run_is_idempotent():
