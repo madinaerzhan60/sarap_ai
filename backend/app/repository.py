@@ -24,6 +24,10 @@ def _uuid_json(value: Any) -> str | None:
     return str(value)
 
 
+def _chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[index:index + size] for index in range(0, len(values), size)]
+
+
 class SupabaseRepository:
     def __init__(self) -> None:
         self.url = os.getenv("SUPABASE_URL", "").rstrip("/")
@@ -193,7 +197,7 @@ class SupabaseRepository:
 
     async def list_processed(self, business_id: UUID) -> list[ProcessedMention]:
         rows = await self.request("GET", "mentions", params={"select": "*", "business_id": f"eq.{business_id}", "order": "collected_at.desc", "limit": "500"})
-        return [await self._hydrate(row) for row in rows]
+        return await self._hydrate_many(rows or [])
 
     async def author_is_ignored(self, business_id: UUID, source: str, author_key: str) -> bool:
         rows = await self.request("GET", "ignored_authors", params={"select": "id", "business_id": f"eq.{business_id}", "source": f"eq.{source}", "author_key": f"eq.{author_key}", "limit": "1"})
@@ -225,13 +229,69 @@ class SupabaseRepository:
         )
         analysis = analysis_rows[0] if analysis_rows else {"language": row.get("language") or "unknown", "sentiment": "neutral", "summary": "", "sentiment_score": 0, "severity": "low", "confidence": 0, "escalated": False}
         risk = risk_rows[0] if risk_rows else {"score": 0, "level": "low", "reasons": []}
+        return self._build_processed(row, analysis, aspect_rows, risk, bool(alert_rows))
+
+    async def _load_related_by_mention_ids(self, table: str, mention_ids: list[str], select: str = "*", batch_size: int = 150) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for batch in _chunks(mention_ids, batch_size):
+            if not batch:
+                continue
+            rows.extend(await self.request("GET", table, params={"select": select, "mention_id": f"in.({','.join(batch)})"}) or [])
+        return rows
+
+    def _build_processed(
+        self,
+        row: dict[str, Any],
+        analysis: dict[str, Any] | None,
+        aspects: list[dict[str, Any]],
+        risk: dict[str, Any] | None,
+        alert_created: bool,
+    ) -> ProcessedMention:
+        analysis = analysis or {"language": row.get("language") or "unknown", "sentiment": "neutral", "summary": "", "sentiment_score": 0, "severity": "low", "confidence": 0, "escalated": False}
+        risk = risk or {"score": 0, "level": "low", "reasons": []}
         mention = NormalizedMention(**{k: row[k] for k in NormalizedMention.model_fields if k in row and row[k] is not None})
         return ProcessedMention(
             mention=mention,
-            analysis=AIAnalysis(language=analysis["language"], sentiment=analysis["sentiment"], summary=analysis.get("summary") or "", sentiment_score=float(analysis.get("sentiment_score") or 0), severity=analysis["severity"], confidence=float(analysis.get("confidence") or 0), escalated=analysis.get("escalated", False), aspects=[Aspect(aspect=a["aspect"], sentiment=a["sentiment"]) for a in aspect_rows]),
+            analysis=AIAnalysis(
+                language=analysis["language"],
+                sentiment=analysis["sentiment"],
+                summary=analysis.get("summary") or "",
+                sentiment_score=float(analysis.get("sentiment_score") or 0),
+                severity=analysis["severity"],
+                confidence=float(analysis.get("confidence") or 0),
+                escalated=analysis.get("escalated", False),
+                aspects=[Aspect(aspect=a["aspect"], sentiment=a["sentiment"]) for a in aspects],
+            ),
             risk=RiskResult(score=risk["score"], level=risk["level"], reasons=risk.get("reasons") or []),
-            alert_created=bool(alert_rows),
+            alert_created=alert_created,
         )
+
+    async def _hydrate_many(self, rows: list[dict[str, Any]]) -> list[ProcessedMention]:
+        mention_ids = [str(row["id"]) for row in rows]
+        if not mention_ids:
+            return []
+        analysis_rows, aspect_rows, risk_rows, alert_rows = await __import__("asyncio").gather(
+            self._load_related_by_mention_ids("ai_analysis", mention_ids),
+            self._load_related_by_mention_ids("mention_aspects", mention_ids),
+            self._load_related_by_mention_ids("risk_scores", mention_ids),
+            self._load_related_by_mention_ids("alerts", mention_ids, select="id,mention_id"),
+        )
+        analysis_by_id = {str(row["mention_id"]): row for row in analysis_rows}
+        risk_by_id = {str(row["mention_id"]): row for row in risk_rows}
+        alerts = {str(row["mention_id"]) for row in alert_rows}
+        aspects_by_id: dict[str, list[dict[str, Any]]] = {}
+        for aspect in aspect_rows:
+            aspects_by_id.setdefault(str(aspect["mention_id"]), []).append(aspect)
+        return [
+            self._build_processed(
+                row,
+                analysis_by_id.get(str(row["id"])),
+                aspects_by_id.get(str(row["id"]), []),
+                risk_by_id.get(str(row["id"])),
+                str(row["id"]) in alerts,
+            )
+            for row in rows
+        ]
 
     async def create_source(self, source: SourceCreate) -> dict[str, Any]:
         existing_params = {
