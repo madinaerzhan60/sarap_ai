@@ -163,8 +163,13 @@ class CollectorRegistry:
         mode = str(source.get("collection_mode", "auto"))
         use_worker = bool(os.getenv("COLLECTOR_WORKER_URL", "").strip())
         if source_type == SourceType.TWO_GIS:
-            provider_key = os.getenv("TWOGIS_PROVIDER", "direct").strip().lower()
-            from app.connectors.reviews import TwoGisPlaywrightConnector, MapFallbackConnector
+            has_apify_token = bool(os.getenv("APIFY_API_TOKEN") or os.getenv("APIFY_TOKEN"))
+            default_provider = "apify" if has_apify_token else "direct"
+            provider_key = os.getenv("TWOGIS_PROVIDER", default_provider).strip().lower()
+
+            if provider_key == "apify":
+                from app.connectors.apify_twogis import ApifyTwoGisConnector
+                return source_type, ApifyTwoGisConnector(page_url, business_id)
 
             if provider_key == "brightdata":
                 from app.connectors.brightdata_twogis import BrightDataTwoGisConnector
@@ -175,6 +180,7 @@ class CollectorRegistry:
                 return source_type, ZenRowsTwoGisConnector(page_url, business_id)
 
             if provider_key == "direct":
+                from app.connectors.reviews import TwoGisPlaywrightConnector
                 return source_type, TwoGisPlaywrightConnector(page_url, business_id)
 
             if provider_key == "worker":
@@ -183,6 +189,7 @@ class CollectorRegistry:
                 from app.connectors.worker import ExternalWorkerConnector
                 return source_type, ExternalWorkerConnector("2gis", page_url)
 
+            from app.connectors.reviews import TwoGisPlaywrightConnector
             return source_type, TwoGisPlaywrightConnector(page_url, business_id)
 
         if source_type == SourceType.YANDEX_MAPS:
